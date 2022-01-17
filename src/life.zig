@@ -169,18 +169,18 @@ export fn frame() void
     }
 
     if(game.input.grabMove) {
-        rdr.cam.pos.x += -game.input.mouseMove.x;
-        rdr.cam.pos.y += -game.input.mouseMove.y;
+        rdr.cam.pos.x += -game.input.mouseMove.x/rdr.cam.zoom;
+        rdr.cam.pos.y += -game.input.mouseMove.y/rdr.cam.zoom;
     }
     game.input.mouseMove = vec2.new(0, 0);
 
     const hw = sapp.widthf() / 2.0;
     const hh = sapp.heightf() / 2.0;
 
-    const left = (-hw + rdr.cam.pos.x) * 1.0/rdr.cam.zoom;
-    const right = (hw + rdr.cam.pos.x) * 1.0/rdr.cam.zoom;
-    const bottom = (hh + rdr.cam.pos.y) * 1.0/rdr.cam.zoom;
-    const top = (-hh + rdr.cam.pos.y) * 1.0/rdr.cam.zoom;
+    const left = (-hw) * 1.0/rdr.cam.zoom + rdr.cam.pos.x;
+    const right = (hw) * 1.0/rdr.cam.zoom + rdr.cam.pos.x;
+    const bottom = (hh) * 1.0/rdr.cam.zoom + rdr.cam.pos.y;
+    const top = (-hh) * 1.0/rdr.cam.zoom + rdr.cam.pos.y;
 
     sg.beginDefaultPass(state.pass_action, sapp.width(), sapp.height());
     sg.applyPipeline(state.pipeTex);
@@ -225,6 +225,7 @@ export fn input(ev: ?*const sapp.Event) void
         if(event.key_code == .F1) {
             //reset Camera
             game.input.zoom = 1.0;
+            rdr.cam.pos = vec2.new(0, 0);
         }
     }
     else if(event.type == .MOUSE_SCROLL) {
