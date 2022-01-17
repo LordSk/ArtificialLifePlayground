@@ -42,18 +42,21 @@ const Renderer = struct {
     queueSprite: Array(RenderCommandSprite),
 };
 
-const Input = struct {
-    zoom: f32 = 1.0
-};
-
-const Game = struct {
-    input: Input = .{},
+const Game = struct
+{
+    input: struct
+    {
+        zoom: f32 = 1.0,
+        grabMove: bool = false,
+        mouseMove: vec2 = vec2.new(0, 0)
+    } = .{},
 };
 
 var rdr: Renderer = undefined;
 var game: Game = .{};
 
-const state = struct {
+const state = struct
+{
     var bind: sg.Bindings = .{};
     var pip: sg.Pipeline = .{};
     var pipeTex: sg.Pipeline = .{};
@@ -69,6 +72,8 @@ export fn init() void
     rdr = .{
         .queueSprite = Array(RenderCommandSprite).init(allocator)
     };
+
+    sapp.lockMouse(false); // show cursor
 
     sg.setup(.{
         .context = sgapp.context()
@@ -163,6 +168,12 @@ export fn frame() void
         }
     }
 
+    if(game.input.grabMove) {
+        rdr.cam.pos.x += -game.input.mouseMove.x;
+        rdr.cam.pos.y += -game.input.mouseMove.y;
+    }
+    game.input.mouseMove = vec2.new(0, 0);
+
     const hw = sapp.widthf() / 2.0;
     const hh = sapp.heightf() / 2.0;
 
@@ -224,6 +235,20 @@ export fn input(ev: ?*const sapp.Event) void
             game.input.zoom /= 1.0 + -event.scroll_y * 0.1;
         }
     }
+    else if(event.type == .MOUSE_UP) {
+        if(event.mouse_button == .MIDDLE) {
+            game.input.grabMove = false;
+        }
+    }
+    else if(event.type == .MOUSE_DOWN) {
+        if(event.mouse_button == .MIDDLE) {
+            game.input.grabMove = true;
+        }
+    }
+    else if(event.type == .MOUSE_MOVE) {
+        game.input.mouseMove.x += event.mouse_dx;
+        game.input.mouseMove.y += event.mouse_dy;
+    }
 }
 
 pub fn main() void
@@ -238,6 +263,6 @@ pub fn main() void
         .event_cb = input,
         .width = 1920,
         .height = 1080,
-        .window_title = "Life"
+        .window_title = "Life",
     });
 }

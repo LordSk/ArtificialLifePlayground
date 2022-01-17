@@ -23,6 +23,13 @@ pub const Vec2 = packed struct {
     pub fn new(x: f32, y: f32) Vec2 {
         return Vec2 { .x=x, .y=y };
     }
+
+    pub fn add(left: Vec2, right: Vec2) Vec2 {
+        return Vec2 {
+            .x = left.x + right.x,
+            .y = left.y + right.y
+        };
+    }
 };
 
 pub const Vec3 = packed struct {
