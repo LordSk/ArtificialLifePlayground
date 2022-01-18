@@ -12,32 +12,27 @@ const ImageEntry = struct {
     path: [*:0]const u8,
     tiles: []const Tile,
     gridDiv: struct {
-        x: i32,
-        y: i32
+        x: u16,
+        y: u16
     } = .{ .x = 1, .y = 1 }
 };
 
 // image "hash"
 pub const ImageID = struct {
-    u: u32,
+    img: u16,
+    tile: u16,
 
-    fn fromName(comptime name: []const u8) ImageID
+    fn fromName(name: []const u8) ImageID
     {
-        comptime {
-            comptime var id: ImageID = .{ .u = 1 };
-
-            for(g_ImageList) |image| {
-                for(image.tiles) |tile| {
-                    if(StringEquals(tile.name, name)) {
-                        return id;
-                    }
-
-                    id.u += 1;
+        for(g_ImageList) |image, ii| {
+            for(image.tiles) |tile, ti| {
+                if(StringEquals(tile.name, name)) {
+                    return .{ .img = @intCast(u16, ii), .tile = @intCast(u16, ti) };
                 }
             }
-
-            unreachable; // image not found
         }
+
+        unreachable; // image not found
     }
 };
 
@@ -89,7 +84,7 @@ fn StringEquals(str1: []const u8, str2: []const u8) bool
 {
     if(str1.len != str2.len) return false;
 
-    comptime var i = 0;
+    var i: usize = 0;
     while(i < str1.len) {
         if(str1[i] != str2[i]) return false;
         i += 1;
@@ -99,27 +94,36 @@ fn StringEquals(str1: []const u8, str2: []const u8) bool
 
 pub const IMG = ImageID.fromName;
 
+var g_GpuImages: [g_ImageList.len]sg.Image = undefined;
+var g_GpuDefaultImage: sg.Image = undefined;
+
+pub fn GetGpuImage(id: ImageID) sg.Image
+{
+    return g_GpuImages[id.img];
+}
+
+pub fn GetGpuImageTileInfo(id: ImageID) [3]i32
+{
+    const img = g_ImageList[id.img];
+    return .{
+        img.tiles[id.tile].gridPos,
+        img.gridDiv.x,
+        img.gridDiv.y
+    };
+}
+
 const g_ImageList = [_]ImageEntry
 {
     .{
         .path = "data/tiles.png",
         .gridDiv = .{ .x = 8, .y = 8 },
         .tiles = &.{
-            .{ .name = "rock", .gridPos = 0 }
-        }
-    },
-    .{
-        .path = "data/test.png",
-        .tiles = &.{
-            .{ .name = "test", .gridPos = 0 }
+            .{ .name = "rock", .gridPos = 0 },
+            .{ .name = "plant1", .gridPos = 1 },
+            .{ .name = "plant2", .gridPos = 2 },
+            .{ .name = "plant3", .gridPos = 3 },
+            .{ .name = "cow", .gridPos = 4 },
+            .{ .name = "zap", .gridPos = 5 },
         }
     },
 };
-
-var g_GpuImages: [g_ImageList.len]sg.Image = undefined;
-var g_GpuDefaultImage: sg.Image = undefined;
-
-pub fn GetGpuImage(id: ImageID) sg.Image
-{
-    return g_GpuImages[id.u - 1];
-}

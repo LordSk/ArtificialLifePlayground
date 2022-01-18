@@ -4,6 +4,7 @@
 @vs vs
 uniform vs_params {
     mat4 mvp;
+    ivec3 tile;
 };
 
 in vec3 position;
@@ -13,7 +14,9 @@ out vec2 uv;
 
 void main() {
     gl_Position = mvp * vec4(position.xy, 0.0, 1.0);
-    uv = uv0;
+    float ix = tile.x % tile.y;
+    float iy = tile.x / tile.z;
+    uv = vec2(ix/tile.y + uv0.x * (1.0/tile.y), iy/tile.z + uv0.y * (1.0)/tile.z);
 }
 @end
 

@@ -37,9 +37,17 @@ const RenderCommandSprite = struct {
     imgID: content.ImageID,
 };
 
-const Renderer = struct {
+const Renderer = struct
+{
+    const Self = @This();
+
     cam: Camera = .{},
     queueSprite: Array(RenderCommandSprite),
+
+    fn Push(self: *Self, cmd: RenderCommandSprite) void
+    {
+        self.queueSprite.append(cmd) catch unreachable;
+    }
 };
 
 const Game = struct
@@ -65,12 +73,30 @@ const state = struct
 
 var arena: std.heap.ArenaAllocator = undefined; // initialized in main
 
+var xorshift32_state: u32 = 0x1234;
+
+fn xorshift32() u32
+{
+    var x = xorshift32_state;
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    xorshift32_state = x;
+    return x;
+}
+
+inline fn randi(min: i32, max: i32) i32
+{
+    const mod = @intCast(u32, max - min + 1);
+    return min + @intCast(i32, xorshift32() % mod);
+}
+
 export fn init() void
 {
     const allocator = arena.allocator();
 
     rdr = .{
-        .queueSprite = Array(RenderCommandSprite).init(allocator)
+        .queueSprite = Array(RenderCommandSprite).initCapacity(allocator, 10000) catch unreachable
     };
 
     sapp.lockMouse(false); // show cursor
@@ -142,16 +168,35 @@ export fn init() void
         return;
     }
 
-    rdr.queueSprite.append(.{
+    rdr.Push(.{
         .pos = .{ .x = 0.0, .y =  0.0 },
-        .imgID = content.IMG("rock"),
-    }) catch unreachable;
+        .imgID = comptime content.IMG("plant2"),
+    });
+    
+    var y: f32 = 0.0;
+    while(y < 1000): (y += 1) {
+        var x: f32 = 0.0;
+        while(x < 1000): (x += 1) {
+            const r = randi(0, 100);
 
-    rdr.queueSprite.append(.{
-        .pos = .{ .x = 1.0, .y =  0.0 },
-        .size = .{ .x = 1600.0, .y =  2549.0 },
-        .imgID = content.IMG("test"),
-    }) catch unreachable;
+            const img = switch(r) {
+                0 => "rock",
+                1 => "plant1",
+                2 => "plant2",
+                3 => "plant3",
+                4 => "cow",
+                5 => "zap",
+                else => continue
+            };
+
+            rdr.Push(.{
+                .pos = .{ .x = x, .y = y },
+                .imgID = content.IMG(img),
+            });
+        }
+    }
+
+    logf("render commands = {any}", .{ rdr.queueSprite.items.len });
 }
 
 export fn frame() void
@@ -188,10 +233,11 @@ export fn frame() void
     const view = mat4.ortho(left, right, bottom, top, -10.0, 10.0);
 
     for(rdr.queueSprite.items) |value| {
-        const vs_params = .{
-            mat4.mul(view,
+        const vs_params: shd.texture.VsParams = .{
+            .mvp = mat4.mul(view,
                 mat4.mul(mat4.translate(vec3.new(value.pos.x, value.pos.y, 0)), mat4.scale(vec3.new(value.size.x, value.size.y, 1)))
-            )
+            ),
+            .tile = content.GetGpuImageTileInfo(value.imgID)
         };
 
         const fs_params: shd.texture.FsParams = .{
