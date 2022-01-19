@@ -41,7 +41,7 @@ const Renderer = struct
         tsi: u16, // tileset index
         tsw: u8, // tileset div width
         tsh: u8, // tileset div height
-        color: u32
+        color: u24
     };
 
     cam: Camera = .{},
@@ -155,7 +155,7 @@ const Renderer = struct
         return true;
     }
 
-    fn push(self: *Self, imgID: content.ImageID, gridx: u16, gridy: u16) void
+    fn push(self: *Self, imgID: content.ImageID, gridx: u16, gridy: u16, color: u24) void
     {
         const info = content.GetGpuImageTileInfo(imgID);
         self.tileBatch.append(.{
@@ -164,7 +164,7 @@ const Renderer = struct
             .tsi = info.index,
             .tsw = info.divw,
             .tsh = info.divh,
-            .color = 0xFFFFFFFF
+            .color = color
         }) catch unreachable;
     }
 
@@ -253,8 +253,6 @@ export fn init() void
         return;
     }
 
-    rdr.push(comptime content.IMG("rock"), 0, 0);
-    
     var y: u16 = 0;
     while(y < 1024): (y += 1) {
         var x: u16 = 0;
@@ -271,7 +269,7 @@ export fn init() void
                 else => continue
             };
 
-            rdr.push(content.IMG(img), x, y);
+            rdr.push(content.IMG(img), x, y, @intCast(u24, randi(0, 0xFFFFFF)));
         }
     }
 
@@ -356,5 +354,6 @@ pub fn main() void
         .width = 1920,
         .height = 1080,
         .window_title = "Life",
+        .swap_interval = 0
     });
 }
