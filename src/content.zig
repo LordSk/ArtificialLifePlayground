@@ -5,15 +5,15 @@ const std = @import("std");
 
 const Tile = struct {
     name: []const u8,
-    gridPos: u8
+    index: u16
 };
 
 const ImageEntry = struct {
     path: [*:0]const u8,
     tiles: []const Tile,
     gridDiv: struct {
-        x: u16,
-        y: u16
+        x: u8,
+        y: u8
     } = .{ .x = 1, .y = 1 }
 };
 
@@ -114,13 +114,13 @@ pub fn GetGpuImage(id: ImageID) sg.Image
     return g_GpuImages[id.img];
 }
 
-pub fn GetGpuImageTileInfo(id: ImageID) [3]i32
+pub fn GetGpuImageTileInfo(id: ImageID) struct { index: u16, divw: u8, divh: u8 }
 {
     const img = g_ImageList[id.img];
     return .{
-        img.tiles[id.tile].gridPos,
-        img.gridDiv.x,
-        img.gridDiv.y
+        .index = img.tiles[id.tile].index,
+        .divw = img.gridDiv.x,
+        .divh = img.gridDiv.y
     };
 }
 
@@ -130,12 +130,12 @@ const g_ImageList = [_]ImageEntry
         .path = "data/tiles.png",
         .gridDiv = .{ .x = 8, .y = 8 },
         .tiles = &.{
-            .{ .name = "rock", .gridPos = 0 },
-            .{ .name = "plant1", .gridPos = 1 },
-            .{ .name = "plant2", .gridPos = 2 },
-            .{ .name = "plant3", .gridPos = 3 },
-            .{ .name = "cow", .gridPos = 4 },
-            .{ .name = "zap", .gridPos = 5 },
+            .{ .name = "rock", .index = 0 },
+            .{ .name = "plant1", .index = 1 },
+            .{ .name = "plant2", .index = 2 },
+            .{ .name = "plant3", .index = 3 },
+            .{ .name = "cow", .index = 4 },
+            .{ .name = "zap", .index = 5 },
         }
     },
 };

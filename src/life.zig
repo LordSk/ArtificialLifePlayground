@@ -5,12 +5,15 @@ const sgapp = @import("sokol").app_gfx_glue;
 const shd   = @import("shaders/shaders.zig");
 const math  = @import("math.zig");
 const content = @import("content.zig");
+const assert = std.debug.assert;
 
 const vec2 = math.Vec2;
 const vec3 = math.Vec3;
 const mat4 = math.Mat4;
 
 const Array = std.ArrayList;
+
+const MAX_TILE_BATCH: usize = 1024*1024;
 
 fn logf(comptime format: []const u8, args: anytype) void
 {
@@ -29,20 +32,19 @@ const Camera = struct {
     zoom: f32 = 1.0,
 };
 
-const RenderCommandSprite = struct {
-    pos: vec2,
-    size: vec2 = .{ .x = 1.0, .y = 1.0 },
-    rot: f32 = 0,
-    color: u32 = 0xFFFFFFFF,
-    imgID: content.ImageID,
-};
-
 const Renderer = struct
 {
     const Self = @This();
+    const GpuTileEntry = struct {
+        gridx: u16,
+        gridy: u16,
+        tsi: u16, // tileset index
+        tsw: u8, // tileset div width
+        tsh: u8, // tileset div height
+        color: u32
+    };
 
     cam: Camera = .{},
-    queueSprite: Array(RenderCommandSprite),
 
     state: struct
     {
@@ -53,18 +55,24 @@ const Renderer = struct
         pass_action: sg.PassAction = .{},
     } = .{},
 
+    tileBuffer: sg.Buffer,
+    tileBatch: Array(GpuTileEntry),
+
     fn init(self: *Self) bool
     {
+        comptime assert(@sizeOf(GpuTileEntry) == 12);
+
         const allocator = arena.allocator();
-        self.queueSprite = Array(RenderCommandSprite).initCapacity(allocator, 10000) catch unreachable;
+
+        self.tileBatch = Array(GpuTileEntry).initCapacity(allocator, MAX_TILE_BATCH) catch unreachable;
 
         // a vertex buffer
         const vertices = [_]f32 {
             // positions         uv
-            0.0, 1.0, 0.0,     0, 1,
-            1.0, 1.0, 0.0,     1, 1,
+            0.0, 0.0, 0.0,     0, 0,
             1.0, 0.0, 0.0,     1, 0,
-            0.0, 0.0, 0.0,     0, 0
+            1.0, 1.0, 0.0,     1, 1,
+            0.0, 1.0, 0.0,     0, 1,
         };
         self.state.bind.vertex_buffers[0] = sg.makeBuffer(.{
             .data = sg.asRange(vertices)
@@ -85,7 +93,7 @@ const Renderer = struct
                 .compare = .LESS_EQUAL,
                 .write_enabled = true,
             },
-            .cull_mode = .NONE,
+            .cull_mode = .BACK,
         };
         pip_desc.layout.attrs[shd.color.ATTR_vs_position].format = .FLOAT3;
         pip_desc.layout.attrs[shd.color.ATTR_vs_color0].format = .FLOAT4;
@@ -99,7 +107,7 @@ const Renderer = struct
                 .compare = .LESS_EQUAL,
                 .write_enabled = true,
             },
-            .cull_mode = .NONE
+            .cull_mode = .BACK
         };
         pip_desc.layout.attrs[shd.texture.ATTR_vs_position].format = .FLOAT3;
         pip_desc.layout.attrs[shd.texture.ATTR_vs_uv0].format = .FLOAT2;
@@ -110,14 +118,54 @@ const Renderer = struct
         };
         self.state.pipeTex = sg.makePipeline(pip_desc);
 
+        // tile pipeline
+        self.tileBuffer = sg.makeBuffer(.{
+            .usage = .STREAM,
+            .size = MAX_TILE_BATCH * @sizeOf(GpuTileEntry)
+        });
+        if(self.tileBuffer.id == 0) return false;
+        self.state.bind.vertex_buffers[1] = self.tileBuffer;
+
+        pip_desc = .{
+            .index_type = .UINT16,
+            .shader = sg.makeShader(shd.tile.colorShaderDesc(sg.queryBackend())),
+            .depth = .{
+                .compare = .LESS_EQUAL,
+                .write_enabled = true,
+            },
+            .cull_mode = .BACK
+        };
+        pip_desc.layout.attrs[shd.tile.ATTR_vs_vert_pos].format = .FLOAT3;
+        pip_desc.layout.attrs[shd.tile.ATTR_vs_vert_uv].format = .FLOAT2;
+        // NOTE how the vertex layout is setup for instancing, with the instancing
+        // data provided by buffer-slot 1:
+        pip_desc.layout.buffers[1].step_func = .PER_INSTANCE;
+        pip_desc.layout.attrs[shd.tile.ATTR_vs_tile] = .{ .format = .FLOAT3, .buffer_index = 1 }; // instance positions
+
+        pip_desc.colors[0].blend = .{
+            .enabled = true,
+            .src_factor_rgb = .SRC_ALPHA,
+            .dst_factor_rgb = .ONE_MINUS_SRC_ALPHA
+        };
+
+        self.state.pipeTile = sg.makePipeline(pip_desc);
+
         // clear to grey
         self.state.pass_action.colors[0] = .{ .action=.CLEAR, .value=.{ .r=0.2, .g=0.2, .b=0.2, .a=1 } };
         return true;
     }
 
-    fn Push(self: *Self, cmd: RenderCommandSprite) void
+    fn push(self: *Self, imgID: content.ImageID, gridx: u16, gridy: u16) void
     {
-        self.queueSprite.append(cmd) catch unreachable;
+        const info = content.GetGpuImageTileInfo(imgID);
+        self.tileBatch.append(.{
+            .gridx = gridx,
+            .gridy = gridy,
+            .tsi = info.index,
+            .tsw = info.divw,
+            .tsh = info.divh,
+            .color = 0xFFFFFFFF
+        }) catch unreachable;
     }
 
     fn render(self: *Self) void
@@ -125,39 +173,27 @@ const Renderer = struct
         const hw = sapp.widthf() / 2.0;
         const hh = sapp.heightf() / 2.0;
 
-        const left = (-hw) * 1.0/rdr.cam.zoom + rdr.cam.pos.x;
-        const right = (hw) * 1.0/rdr.cam.zoom + rdr.cam.pos.x;
-        const bottom = (hh) * 1.0/rdr.cam.zoom + rdr.cam.pos.y;
-        const top = (-hh) * 1.0/rdr.cam.zoom + rdr.cam.pos.y;
-
-        sg.beginDefaultPass(self.state.pass_action, sapp.width(), sapp.height());
-        sg.applyPipeline(self.state.pipeTex);
+        const left = (-hw) * 1.0/self.cam.zoom + self.cam.pos.x;
+        const right = (hw) * 1.0/self.cam.zoom + self.cam.pos.x;
+        const bottom = (hh) * 1.0/self.cam.zoom + self.cam.pos.y;
+        const top = (-hh) * 1.0/self.cam.zoom + self.cam.pos.y;
 
         const view = mat4.ortho(left, right, bottom, top, -10.0, 10.0);
 
-        var curImgID = content.ImageID.none();
+        sg.updateBuffer(self.state.bind.vertex_buffers[1], sg.asRange(self.tileBatch.items));
 
-        for(rdr.queueSprite.items) |value| {
-            const vs_params: shd.texture.VsParams = .{
-                .mvp = mat4.mul(view,
-                    mat4.mul(mat4.translate(vec3.new(value.pos.x, value.pos.y, 0)), mat4.scale(vec3.new(value.size.x, value.size.y, 1)))
-                ),
-            };
+        sg.beginDefaultPass(self.state.pass_action, sapp.width(), sapp.height());
+        sg.applyPipeline(self.state.pipeTile);
+        
+        self.state.bind.fs_images[0] = content.GetGpuImage(.{ .img = 0, .tile = 0 });
+        sg.applyBindings(self.state.bind);
 
-            const fs_params: shd.texture.FsParams = .{
-                .color = .{1, 1, 1}
-            };
-            sg.applyUniforms(.FS, shd.texture.SLOT_fs_params, sg.asRange(fs_params));
+        const vs_params: shd.tile.VsParams = .{
+            .vp = view,
+        };
 
-            if(!value.imgID.equals(curImgID)) {
-                self.state.bind.fs_images[0] = content.GetGpuImage(value.imgID);
-                sg.applyBindings(self.state.bind);
-                curImgID = value.imgID;
-            }
-
-            sg.applyUniforms(.VS, shd.texture.SLOT_vs_params, sg.asRange(vs_params));
-            sg.draw(0, 6, 1);
-        }
+        sg.applyUniforms(.VS, shd.tile.SLOT_vs_params, sg.asRange(vs_params));
+        sg.draw(0, 6, @intCast(u32, self.tileBatch.items.len));
 
         sg.endPass();
         sg.commit();
@@ -217,16 +253,13 @@ export fn init() void
         return;
     }
 
-    rdr.Push(.{
-        .pos = .{ .x = 0.0, .y =  0.0 },
-        .imgID = comptime content.IMG("plant2"),
-    });
+    rdr.push(comptime content.IMG("rock"), 0, 0);
     
-    var y: f32 = 0.0;
-    while(y < 1000): (y += 1) {
-        var x: f32 = 0.0;
-        while(x < 1000): (x += 1) {
-            const r = randi(0, 100);
+    var y: u16 = 0;
+    while(y < 1024): (y += 1) {
+        var x: u16 = 0;
+        while(x < 1024): (x += 1) {
+            const r = randi(0, 6);
 
             const img = switch(r) {
                 0 => "rock",
@@ -238,14 +271,11 @@ export fn init() void
                 else => continue
             };
 
-            rdr.Push(.{
-                .pos = .{ .x = x, .y = y },
-                .imgID = content.IMG(img),
-            });
+            rdr.push(content.IMG(img), x, y);
         }
     }
 
-    logf("render commands = {any}", .{ rdr.queueSprite.items.len });
+    logf("render commands = {any}", .{ rdr.tileBatch.items.len });
 }
 
 export fn frame() void
