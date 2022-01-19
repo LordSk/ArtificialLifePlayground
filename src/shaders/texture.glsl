@@ -4,7 +4,6 @@
 @vs vs
 uniform vs_params {
     mat4 mvp;
-    ivec3 tile;
 };
 
 in vec3 position;
@@ -14,9 +13,7 @@ out vec2 uv;
 
 void main() {
     gl_Position = mvp * vec4(position.xy, 0.0, 1.0);
-    float ix = tile.x % tile.y;
-    float iy = tile.x / tile.z;
-    uv = vec2(ix/tile.y + uv0.x * (1.0/tile.y), iy/tile.z + uv0.y * (1.0)/tile.z);
+    uv = uv0;
 }
 @end
 
@@ -33,7 +30,6 @@ out vec4 frag_color;
 
 void main() {
     frag_color = texture(tex, uv) * vec4(color, 1.0);
-    //frag_color = vec4(uv, 0.0, 1.0);
 }
 @end
 

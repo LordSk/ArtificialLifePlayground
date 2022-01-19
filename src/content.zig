@@ -19,6 +19,8 @@ const ImageEntry = struct {
 
 // image "hash"
 pub const ImageID = struct {
+    const Self = @This();
+
     img: u16,
     tile: u16,
 
@@ -33,6 +35,16 @@ pub const ImageID = struct {
         }
 
         unreachable; // image not found
+    }
+
+    pub fn none() ImageID
+    {
+        return .{ .img = 0xFFFF, .tile = 0xFFFF };
+    }
+
+    pub fn equals(self: Self, other: ImageID) bool
+    {
+        return self.img == other.img and self.tile == other.tile;
     }
 };
 

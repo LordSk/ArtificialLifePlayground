@@ -44,9 +44,123 @@ const Renderer = struct
     cam: Camera = .{},
     queueSprite: Array(RenderCommandSprite),
 
+    state: struct
+    {
+        bind: sg.Bindings = .{},
+        pip: sg.Pipeline = .{},
+        pipeTex: sg.Pipeline = .{},
+        pipeTile: sg.Pipeline = .{},
+        pass_action: sg.PassAction = .{},
+    } = .{},
+
+    fn init(self: *Self) bool
+    {
+        const allocator = arena.allocator();
+        self.queueSprite = Array(RenderCommandSprite).initCapacity(allocator, 10000) catch unreachable;
+
+        // a vertex buffer
+        const vertices = [_]f32 {
+            // positions         uv
+            0.0, 1.0, 0.0,     0, 1,
+            1.0, 1.0, 0.0,     1, 1,
+            1.0, 0.0, 0.0,     1, 0,
+            0.0, 0.0, 0.0,     0, 0
+        };
+        self.state.bind.vertex_buffers[0] = sg.makeBuffer(.{
+            .data = sg.asRange(vertices)
+        });
+
+        // an index buffer
+        const indices = [_] u16 { 0, 1, 2,  0, 2, 3 };
+        self.state.bind.index_buffer = sg.makeBuffer(.{
+            .type = .INDEXBUFFER,
+            .data = sg.asRange(indices)
+        });
+
+        // a shader and pipeline state object
+        var pip_desc: sg.PipelineDesc = .{
+            .index_type = .UINT16,
+            .shader = sg.makeShader(shd.color.colorShaderDesc(sg.queryBackend())),
+            .depth = .{
+                .compare = .LESS_EQUAL,
+                .write_enabled = true,
+            },
+            .cull_mode = .NONE,
+        };
+        pip_desc.layout.attrs[shd.color.ATTR_vs_position].format = .FLOAT3;
+        pip_desc.layout.attrs[shd.color.ATTR_vs_color0].format = .FLOAT4;
+        self.state.pip = sg.makePipeline(pip_desc);
+
+        // a shader and pipeline state object
+        pip_desc = .{
+            .index_type = .UINT16,
+            .shader = sg.makeShader(shd.texture.colorShaderDesc(sg.queryBackend())),
+            .depth = .{
+                .compare = .LESS_EQUAL,
+                .write_enabled = true,
+            },
+            .cull_mode = .NONE
+        };
+        pip_desc.layout.attrs[shd.texture.ATTR_vs_position].format = .FLOAT3;
+        pip_desc.layout.attrs[shd.texture.ATTR_vs_uv0].format = .FLOAT2;
+        pip_desc.colors[0].blend = .{
+            .enabled = true,
+            .src_factor_rgb = .SRC_ALPHA,
+            .dst_factor_rgb = .ONE_MINUS_SRC_ALPHA
+        };
+        self.state.pipeTex = sg.makePipeline(pip_desc);
+
+        // clear to grey
+        self.state.pass_action.colors[0] = .{ .action=.CLEAR, .value=.{ .r=0.2, .g=0.2, .b=0.2, .a=1 } };
+        return true;
+    }
+
     fn Push(self: *Self, cmd: RenderCommandSprite) void
     {
         self.queueSprite.append(cmd) catch unreachable;
+    }
+
+    fn render(self: *Self) void
+    {
+        const hw = sapp.widthf() / 2.0;
+        const hh = sapp.heightf() / 2.0;
+
+        const left = (-hw) * 1.0/rdr.cam.zoom + rdr.cam.pos.x;
+        const right = (hw) * 1.0/rdr.cam.zoom + rdr.cam.pos.x;
+        const bottom = (hh) * 1.0/rdr.cam.zoom + rdr.cam.pos.y;
+        const top = (-hh) * 1.0/rdr.cam.zoom + rdr.cam.pos.y;
+
+        sg.beginDefaultPass(self.state.pass_action, sapp.width(), sapp.height());
+        sg.applyPipeline(self.state.pipeTex);
+
+        const view = mat4.ortho(left, right, bottom, top, -10.0, 10.0);
+
+        var curImgID = content.ImageID.none();
+
+        for(rdr.queueSprite.items) |value| {
+            const vs_params: shd.texture.VsParams = .{
+                .mvp = mat4.mul(view,
+                    mat4.mul(mat4.translate(vec3.new(value.pos.x, value.pos.y, 0)), mat4.scale(vec3.new(value.size.x, value.size.y, 1)))
+                ),
+            };
+
+            const fs_params: shd.texture.FsParams = .{
+                .color = .{1, 1, 1}
+            };
+            sg.applyUniforms(.FS, shd.texture.SLOT_fs_params, sg.asRange(fs_params));
+
+            if(!value.imgID.equals(curImgID)) {
+                self.state.bind.fs_images[0] = content.GetGpuImage(value.imgID);
+                sg.applyBindings(self.state.bind);
+                curImgID = value.imgID;
+            }
+
+            sg.applyUniforms(.VS, shd.texture.SLOT_vs_params, sg.asRange(vs_params));
+            sg.draw(0, 6, 1);
+        }
+
+        sg.endPass();
+        sg.commit();
     }
 };
 
@@ -62,14 +176,6 @@ const Game = struct
 
 var rdr: Renderer = undefined;
 var game: Game = .{};
-
-const state = struct
-{
-    var bind: sg.Bindings = .{};
-    var pip: sg.Pipeline = .{};
-    var pipeTex: sg.Pipeline = .{};
-    var pass_action: sg.PassAction = .{};
-};
 
 var arena: std.heap.ArenaAllocator = undefined; // initialized in main
 
@@ -93,77 +199,20 @@ inline fn randi(min: i32, max: i32) i32
 
 export fn init() void
 {
-    const allocator = arena.allocator();
-
-    rdr = .{
-        .queueSprite = Array(RenderCommandSprite).initCapacity(allocator, 10000) catch unreachable
-    };
-
     sapp.lockMouse(false); // show cursor
 
     sg.setup(.{
         .context = sgapp.context()
     });
-    
-     // a vertex buffer
-    const vertices = [_]f32 {
-        // positions         uv
-        0.0, 1.0, 0.0,     0, 1,
-        1.0, 1.0, 0.0,     1, 1,
-        1.0, 0.0, 0.0,     1, 0,
-        0.0, 0.0, 0.0,     0, 0
-    };
-    state.bind.vertex_buffers[0] = sg.makeBuffer(.{
-        .data = sg.asRange(vertices)
-    });
 
-    // an index buffer
-    const indices = [_] u16 { 0, 1, 2,  0, 2, 3 };
-    state.bind.index_buffer = sg.makeBuffer(.{
-        .type = .INDEXBUFFER,
-        .data = sg.asRange(indices)
-    });
+    if(!rdr.init()) {
+        log("ERROR: Could not init renderer");
+        sapp.quit();
+        return;
+    }
 
-    // a shader and pipeline state object
-    var pip_desc: sg.PipelineDesc = .{
-        .index_type = .UINT16,
-        .shader = sg.makeShader(shd.color.colorShaderDesc(sg.queryBackend())),
-        .depth = .{
-            .compare = .LESS_EQUAL,
-            .write_enabled = true,
-        },
-        .cull_mode = .NONE,
-    };
-    pip_desc.layout.attrs[shd.color.ATTR_vs_position].format = .FLOAT3;
-    pip_desc.layout.attrs[shd.color.ATTR_vs_color0].format = .FLOAT4;
-    state.pip = sg.makePipeline(pip_desc);
-
-    // a shader and pipeline state object
-    pip_desc = .{
-        .index_type = .UINT16,
-        .shader = sg.makeShader(shd.texture.colorShaderDesc(sg.queryBackend())),
-        .depth = .{
-            .compare = .LESS_EQUAL,
-            .write_enabled = true,
-        },
-        .cull_mode = .NONE
-    };
-    pip_desc.layout.attrs[shd.texture.ATTR_vs_position].format = .FLOAT3;
-    pip_desc.layout.attrs[shd.texture.ATTR_vs_uv0].format = .FLOAT2;
-    pip_desc.colors[0].blend = .{
-        .enabled = true,
-        .src_factor_rgb = .SRC_ALPHA,
-        .dst_factor_rgb = .ONE_MINUS_SRC_ALPHA
-    };
-    state.pipeTex = sg.makePipeline(pip_desc);
-
-    // clear to grey
-    state.pass_action.colors[0] = .{ .action=.CLEAR, .value=.{ .r=0.2, .g=0.2, .b=0.2, .a=1 } };
-
-    //
-    const loaded = content.LoadImages();
-    if(!loaded) {
-        log("ERROR: Could not load all images\n");
+    if(!content.LoadImages()) {
+        log("ERROR: Could not load all images");
         sapp.quit();
         return;
     }
@@ -219,41 +268,7 @@ export fn frame() void
     }
     game.input.mouseMove = vec2.new(0, 0);
 
-    const hw = sapp.widthf() / 2.0;
-    const hh = sapp.heightf() / 2.0;
-
-    const left = (-hw) * 1.0/rdr.cam.zoom + rdr.cam.pos.x;
-    const right = (hw) * 1.0/rdr.cam.zoom + rdr.cam.pos.x;
-    const bottom = (hh) * 1.0/rdr.cam.zoom + rdr.cam.pos.y;
-    const top = (-hh) * 1.0/rdr.cam.zoom + rdr.cam.pos.y;
-
-    sg.beginDefaultPass(state.pass_action, sapp.width(), sapp.height());
-    sg.applyPipeline(state.pipeTex);
-
-    const view = mat4.ortho(left, right, bottom, top, -10.0, 10.0);
-
-    for(rdr.queueSprite.items) |value| {
-        const vs_params: shd.texture.VsParams = .{
-            .mvp = mat4.mul(view,
-                mat4.mul(mat4.translate(vec3.new(value.pos.x, value.pos.y, 0)), mat4.scale(vec3.new(value.size.x, value.size.y, 1)))
-            ),
-            .tile = content.GetGpuImageTileInfo(value.imgID)
-        };
-
-        const fs_params: shd.texture.FsParams = .{
-            .color = .{1, 1, 1}
-        };
-
-        state.bind.fs_images[0] = content.GetGpuImage(value.imgID);
-
-        sg.applyBindings(state.bind);
-        sg.applyUniforms(.VS, shd.texture.SLOT_vs_params, sg.asRange(vs_params));
-        sg.applyUniforms(.FS, shd.texture.SLOT_fs_params, sg.asRange(fs_params));
-        sg.draw(0, 6, 1);
-    }
-   
-    sg.endPass();
-    sg.commit();
+    rdr.render();
 }
 
 export fn cleanup() void
