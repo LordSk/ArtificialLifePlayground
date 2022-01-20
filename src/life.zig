@@ -168,6 +168,11 @@ const Renderer = struct
         }) catch unreachable;
     }
 
+    fn newFrame(self: *Self) void
+    {
+        self.tileBatch.clearRetainingCapacity();
+    }
+
     fn render(self: *Self) void
     {
         const hw = sapp.widthf() / 2.0;
@@ -179,35 +184,140 @@ const Renderer = struct
         const top = (-hh) * 1.0/self.cam.zoom + self.cam.pos.y;
 
         const view = mat4.ortho(left, right, bottom, top, -10.0, 10.0);
-
-        sg.updateBuffer(self.state.bind.vertex_buffers[1], sg.asRange(self.tileBatch.items));
-
+        
         sg.beginDefaultPass(self.state.pass_action, sapp.width(), sapp.height());
         sg.applyPipeline(self.state.pipeTile);
-        
-        self.state.bind.fs_images[0] = content.GetGpuImage(.{ .img = 0, .tile = 0 });
-        sg.applyBindings(self.state.bind);
 
-        const vs_params: shd.tile.VsParams = .{
-            .vp = view,
-        };
+        if(self.tileBatch.items.len > 0) {
+            sg.updateBuffer(self.state.bind.vertex_buffers[1], sg.asRange(self.tileBatch.items));
 
-        sg.applyUniforms(.VS, shd.tile.SLOT_vs_params, sg.asRange(vs_params));
-        sg.draw(0, 6, @intCast(u32, self.tileBatch.items.len));
+            self.state.bind.fs_images[0] = content.GetGpuImage(.{ .img = 0, .tile = 0 });
+            sg.applyBindings(self.state.bind);
+
+            const vs_params: shd.tile.VsParams = .{
+                .vp = view,
+            };
+
+            sg.applyUniforms(.VS, shd.tile.SLOT_vs_params, sg.asRange(vs_params));
+            sg.draw(0, 6, @intCast(u32, self.tileBatch.items.len));
+        }
 
         sg.endPass();
         sg.commit();
     }
 };
 
+const EntityType = enum(u8) {
+    EMPTY,
+    WALL,
+    ZAP,
+    ROCK,
+    PLANT,
+    COW
+};
+
 const Game = struct
 {
+    const Self = @This();
+
+    const Tile = struct {
+        type: EntityType,
+        energy: f32
+    };
+
     input: struct
     {
         zoom: f32 = 1.0,
         grabMove: bool = false,
         mouseMove: vec2 = vec2.new(0, 0)
     } = .{},
+
+    world: [1024][1024]Tile = undefined,
+
+    fn init(self: *Self) void
+    {
+        for(self.world) |*col| {
+            for(col) |*it| {
+                it.* = .{
+                    .type = .EMPTY,
+                    .energy = 0
+                };
+            }
+        }
+    }
+
+    fn step(self: *Self) void
+    {
+        for(self.world) |*col, y| {
+            for(col) |*it, x| {
+                switch(it.type) {
+                    .PLANT => {
+                        it.energy += 10.0;
+                        if(it.energy > 100.0) it.energy = 100;
+
+                        if(it.energy >= 100.0) {
+                            const dx = @intCast(i32, x) + randi(-1, 1);
+                            const dy = @intCast(i32, y) + randi(-1, 1);
+
+                            if(dx < 0 or dx >= 1024) continue;
+                            if(dy < 0 or dy >= 1024) continue;
+
+                            const udx = @intCast(usize, dx);
+                            const udy = @intCast(usize, dy);
+
+                            if(self.world[udy][udx].type != .EMPTY) continue;
+
+                            it.energy = 50.0;
+
+                            self.world[udy][udx] = .{
+                                .type = .PLANT,
+                                .energy = 0.0
+                            };
+                        }
+                    },
+
+                    .ZAP => {
+                        self.world[y][x] = .{
+                            .type = .EMPTY,
+                            .energy = 0.0
+                        };
+                    },
+
+                    else => continue
+                }
+            }
+        }
+
+        const zapCount = randi(0, 512);
+        var z: i32 = 0;
+        while(z < zapCount): (z += 1) {
+            const ux = @intCast(usize, randi(0, 1023));
+            const uy = @intCast(usize, randi(0, 1023));
+
+            self.world[uy][ux] = .{
+                .type = .ZAP,
+                .energy = 0.0
+            };
+        }
+    }
+
+    fn draw(self: Self) void
+    {
+        for(self.world) |col, y| {
+            for(col) |it, x| {
+                const img = switch(it.type) {
+                    .EMPTY => continue,
+                    .WALL => continue,
+                    .ZAP => "zap",
+                    .ROCK => "rock",
+                    .PLANT => if(it.energy > 50.0) "plant3" else if(it.energy > 25.0) "plant2" else "plant1",
+                    .COW => "cow",
+                };
+
+                rdr.push(content.IMG(img), @intCast(u16, x), @intCast(u16, y), 0xFFFFFF);
+            }
+        }
+    }
 };
 
 var rdr: Renderer = undefined;
@@ -253,27 +363,7 @@ export fn init() void
         return;
     }
 
-    var y: u16 = 0;
-    while(y < 1024): (y += 1) {
-        var x: u16 = 0;
-        while(x < 1024): (x += 1) {
-            const r = randi(0, 6);
-
-            const img = switch(r) {
-                0 => "rock",
-                1 => "plant1",
-                2 => "plant2",
-                3 => "plant3",
-                4 => "cow",
-                5 => "zap",
-                else => continue
-            };
-
-            rdr.push(content.IMG(img), x, y, @intCast(u24, randi(0, 0xFFFFFF)));
-        }
-    }
-
-    logf("render commands = {any}", .{ rdr.tileBatch.items.len });
+    game.init();
 }
 
 export fn frame() void
@@ -296,6 +386,11 @@ export fn frame() void
     }
     game.input.mouseMove = vec2.new(0, 0);
 
+    rdr.newFrame();
+
+    game.step();
+    game.draw();
+
     rdr.render();
 }
 
@@ -315,6 +410,14 @@ export fn input(ev: ?*const sapp.Event) void
             //reset Camera
             game.input.zoom = 1.0;
             rdr.cam.pos = vec2.new(0, 0);
+        }
+        if(event.key_code == .SPACE) {
+            log("spawn plant");
+
+            game.world[10][10] = .{
+                .type = .PLANT,
+                .energy = 0.0
+            };
         }
     }
     else if(event.type == .MOUSE_SCROLL) {
