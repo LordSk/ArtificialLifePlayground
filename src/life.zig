@@ -20,6 +20,7 @@ const futex_wake = std.Thread.Futex.wake;
 const WORLD_WIDTH = 1024;
 const WORLD_HEIGHT = 1024;
 const MAX_TILE_BATCH: usize = 1024*1024;
+const MAX_STEP_SPEED = 100;
 
 fn logf(comptime format: []const u8, args: anytype) void
 {
@@ -267,6 +268,8 @@ const Game = struct
     world: [WORLD_WIDTH][WORLD_HEIGHT]Tile = undefined,
 
     pulse: std.atomic.Atomic(u32) = .{ .value = 0 },
+    speed: i32 = 80,
+    dontWaitToStep: bool = false,
 
     fn init(self: *Self) void
     {
@@ -311,7 +314,7 @@ const Game = struct
 
                             self.world[udy][udx] = .{
                                 .type = .PLANT,
-                                .energy = 0
+                                .energy = 20
                             };
                         }
                     },
@@ -344,7 +347,9 @@ const Game = struct
     fn thread(self: *Self) void
     {
         while(self.running) {
-            futex_wait(&self.pulse, 0, null) catch unreachable;
+            if(!self.dontWaitToStep) {
+                futex_wait(&self.pulse, 0, null) catch unreachable;
+            }
             self.step();
         }
     }
@@ -375,6 +380,11 @@ const Game = struct
                 rdr.push(content.IMG(img), @intCast(u16, x), @intCast(u16, y), scale, rot, 0xFFFFFF);
             }
         }
+    }
+
+    fn signalStep(self: *Self) void
+    {
+        futex_wake(&self.pulse, 1);
     }
 };
 
@@ -426,6 +436,24 @@ export fn init() void
     game.init();
 }
 
+fn doUi() void
+{
+    imgui.showDemoWindow();
+
+    if(imgui.begin("Settings")) {
+        if(imgui.button("Reset")) {
+            game.reset();
+        }
+        _ = imgui.sliderInt("Speed", &game.speed, 0, MAX_STEP_SPEED);
+        if(imgui.checkbox("Max speed", &game.dontWaitToStep)) {
+            game.signalStep();
+        }
+    }
+    imgui.end();
+}
+
+var skippedSteps: i32 = 0;
+
 export fn frame() void
 {
     imgui.newFrame(.{
@@ -434,8 +462,6 @@ export fn frame() void
         .delta_time = sapp.frameDuration(),
         .dpi_scale = sapp.dpiScale()
     });
-
-    imgui.showDemoWindow();
 
     // zoom over many frames (smooth zoom)
     // TODO: make this better
@@ -455,11 +481,22 @@ export fn frame() void
     }
     game.input.mouseMove = vec2.new(0, 0);
 
+    doUi();
+
     rdr.newFrame();
+
+    if(skippedSteps == 0) {
+        skippedSteps = MAX_STEP_SPEED - game.speed;
+    }
 
     //game.step();
     game.draw();
-    futex_wake(&game.pulse, 1);
+    if(skippedSteps > 0) {
+        skippedSteps -= 1;
+    }
+    if(game.speed != 0 and skippedSteps == 0) {
+        game.signalStep();
+    }
 
     rdr.render();
 }
@@ -489,7 +526,7 @@ export fn input(ev: ?*const sapp.Event) void
 
             game.world[10][10] = .{
                 .type = .PLANT,
-                .energy = 0.0
+                .energy = 100
             };
         }
         else if(event.key_code == .R) {

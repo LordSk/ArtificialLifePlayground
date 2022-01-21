@@ -112,8 +112,46 @@ pub fn handleEvent(ev: ?*const sapp.Event) bool {
 }
 
 // cimgui.h
+const ImGuiWindowFlags = i32;
+const ImGuiSliderFlags = i32;
+const ImVec2 = extern struct {
+    x: f32,
+    y: f32
+};
+
 pub extern fn igShowDemoWindow(p_open: [*c]bool) void;
+pub extern fn igBegin(name: [*:0]const u8, p_open: [*c]bool, flags: ImGuiWindowFlags) bool;
+pub extern fn igEnd() void;
+pub extern fn igButton(label: [*:0]const u8, size: ImVec2) bool;
+pub extern fn igSliderInt(label: [*:0]const u8, v: [*c]i32, v_min: i32, v_max: i32, format: ?[*:0]const u8, flags: ImGuiSliderFlags) bool;
+pub extern fn igCheckbox(label: [*:0]const u8, v: *bool) bool;
+
 pub fn showDemoWindow() void
 {
     igShowDemoWindow(null);
+}
+
+pub fn begin(name: [*:0]const u8) bool
+{
+    return igBegin(name, null, 0x0);
+}
+
+pub fn end() void
+{
+    return igEnd();
+}
+
+pub fn button(label: [*:0]const u8) bool
+{
+    return igButton(label, .{ .x=0, .y=0 });
+}
+
+pub fn sliderInt(label: [*:0]const u8, val: *i32, v_min: i32, v_max: i32) bool
+{
+    return igSliderInt(label, val, v_min, v_max, null, 0x0);
+}
+
+pub fn checkbox(label: [*:0]const u8, v: *bool) bool
+{
+    return igCheckbox(label, v);
 }
