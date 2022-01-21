@@ -5,7 +5,7 @@ const std = @import("std");
 
 const Tile = struct {
     name: []const u8,
-    index: u16
+    index: u8
 };
 
 const ImageEntry = struct {
@@ -114,7 +114,7 @@ pub fn GetGpuImage(id: ImageID) sg.Image
     return g_GpuImages[id.img];
 }
 
-pub fn GetGpuImageTileInfo(id: ImageID) struct { index: u16, divw: u8, divh: u8 }
+pub fn GetGpuImageTileInfo(id: ImageID) struct { index: u8, divw: u8, divh: u8 }
 {
     const img = g_ImageList[id.img];
     return .{
@@ -131,11 +131,9 @@ const g_ImageList = [_]ImageEntry
         .gridDiv = .{ .x = 8, .y = 8 },
         .tiles = &.{
             .{ .name = "rock", .index = 0 },
-            .{ .name = "plant1", .index = 1 },
-            .{ .name = "plant2", .index = 2 },
-            .{ .name = "plant3", .index = 3 },
-            .{ .name = "cow", .index = 4 },
-            .{ .name = "zap", .index = 5 },
+            .{ .name = "plant", .index = 1 },
+            .{ .name = "cow", .index = 2 },
+            .{ .name = "zap", .index = 3 },
         }
     },
 };

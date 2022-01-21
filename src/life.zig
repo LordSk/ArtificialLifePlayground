@@ -13,6 +13,11 @@ const mat4 = math.Mat4;
 
 const Array = std.ArrayList;
 
+const futex_wait = std.Thread.Futex.wait;
+const futex_wake = std.Thread.Futex.wake;
+
+const WORLD_WIDTH = 1024;
+const WORLD_HEIGHT = 1024;
 const MAX_TILE_BATCH: usize = 1024*1024;
 
 fn logf(comptime format: []const u8, args: anytype) void
@@ -32,16 +37,39 @@ const Camera = struct {
     zoom: f32 = 1.0,
 };
 
+fn assertSize(comptime t: type, size: usize) void
+{
+    if(@sizeOf(t) != size) {
+        @compileLog(@sizeOf(t));
+        @compileError("size does not match");
+    }
+}
+
+fn hash32(data: []const u8) u32
+{
+    var h: u32 = 0x811c9dc5;
+    for(data) |d| {
+        h ^= d;
+        h *%= 0x01000193;
+    }
+    return h;
+}
+
+comptime { assertSize(Renderer.GpuTileEntry, 12); }
+
 const Renderer = struct
 {
     const Self = @This();
-    const GpuTileEntry = struct {
+    const GpuTileEntry = packed struct {
         gridx: u16,
         gridy: u16,
-        tsi: u16, // tileset index
+        tsi: u8, // tileset index
         tsw: u8, // tileset div width
         tsh: u8, // tileset div height
-        color: u24
+        scale: u8,
+        // rot: u8, -> packed struct size is bugged
+        // color: u24 -> packed struct size is bugged
+        rot_color: u32
     };
 
     cam: Camera = .{},
@@ -60,8 +88,6 @@ const Renderer = struct
 
     fn init(self: *Self) bool
     {
-        comptime assert(@sizeOf(GpuTileEntry) == 12);
-
         const allocator = arena.allocator();
 
         self.tileBatch = Array(GpuTileEntry).initCapacity(allocator, MAX_TILE_BATCH) catch unreachable;
@@ -69,10 +95,10 @@ const Renderer = struct
         // a vertex buffer
         const vertices = [_]f32 {
             // positions         uv
-            0.0, 0.0, 0.0,     0, 0,
-            1.0, 0.0, 0.0,     1, 0,
-            1.0, 1.0, 0.0,     1, 1,
-            0.0, 1.0, 0.0,     0, 1,
+            -0.5, -0.5, 0.0,     0, 0,
+             0.5, -0.5, 0.0,     1, 0,
+             0.5,  0.5, 0.0,     1, 1,
+            -0.5,  0.5, 0.0,     0, 1,
         };
         self.state.bind.vertex_buffers[0] = sg.makeBuffer(.{
             .data = sg.asRange(vertices)
@@ -155,7 +181,7 @@ const Renderer = struct
         return true;
     }
 
-    fn push(self: *Self, imgID: content.ImageID, gridx: u16, gridy: u16, color: u24) void
+    fn push(self: *Self, imgID: content.ImageID, gridx: u16, gridy: u16, scale: u8, rot: u8, color: u24) void
     {
         const info = content.GetGpuImageTileInfo(imgID);
         self.tileBatch.append(.{
@@ -164,7 +190,8 @@ const Renderer = struct
             .tsi = info.index,
             .tsw = info.divw,
             .tsh = info.divh,
-            .color = color
+            .scale = scale,
+            .rot_color = @intCast(u32, rot) | (@intCast(u32, color) << 8),
         }) catch unreachable;
     }
 
@@ -222,8 +249,10 @@ const Game = struct
 
     const Tile = struct {
         type: EntityType,
-        energy: f32
+        energy: u8
     };
+
+    running: bool = true,
 
     input: struct
     {
@@ -232,9 +261,17 @@ const Game = struct
         mouseMove: vec2 = vec2.new(0, 0)
     } = .{},
 
-    world: [1024][1024]Tile = undefined,
+    world: [WORLD_WIDTH][WORLD_HEIGHT]Tile = undefined,
+
+    pulse: std.atomic.Atomic(u32) = .{ .value = 0 },
 
     fn init(self: *Self) void
+    {
+        self.reset();
+        _ = std.Thread.spawn(.{}, thread, .{ self }) catch unreachable;
+    }
+
+    fn reset(self: *Self) void
     {
         for(self.world) |*col| {
             for(col) |*it| {
@@ -252,26 +289,26 @@ const Game = struct
             for(col) |*it, x| {
                 switch(it.type) {
                     .PLANT => {
-                        it.energy += 10.0;
-                        if(it.energy > 100.0) it.energy = 100;
+                        it.energy += 5;
+                        if(it.energy > 100) it.energy = 100;
 
-                        if(it.energy >= 100.0) {
+                        if(it.energy > 50 and randi(0, 10) == 0) {
                             const dx = @intCast(i32, x) + randi(-1, 1);
                             const dy = @intCast(i32, y) + randi(-1, 1);
 
-                            if(dx < 0 or dx >= 1024) continue;
-                            if(dy < 0 or dy >= 1024) continue;
+                            if(dx < 0 or dx >= WORLD_WIDTH) continue;
+                            if(dy < 0 or dy >= WORLD_HEIGHT) continue;
 
                             const udx = @intCast(usize, dx);
                             const udy = @intCast(usize, dy);
 
                             if(self.world[udy][udx].type != .EMPTY) continue;
 
-                            it.energy = 50.0;
+                            it.energy -= @intCast(u8, randi(35, 50));
 
                             self.world[udy][udx] = .{
                                 .type = .PLANT,
-                                .energy = 0.0
+                                .energy = 0
                             };
                         }
                     },
@@ -279,7 +316,7 @@ const Game = struct
                     .ZAP => {
                         self.world[y][x] = .{
                             .type = .EMPTY,
-                            .energy = 0.0
+                            .energy = 0
                         };
                     },
 
@@ -291,13 +328,21 @@ const Game = struct
         const zapCount = randi(0, 512);
         var z: i32 = 0;
         while(z < zapCount): (z += 1) {
-            const ux = @intCast(usize, randi(0, 1023));
-            const uy = @intCast(usize, randi(0, 1023));
+            const ux = @intCast(usize, randi(0, WORLD_WIDTH-1));
+            const uy = @intCast(usize, randi(0, WORLD_HEIGHT-1));
 
             self.world[uy][ux] = .{
                 .type = .ZAP,
-                .energy = 0.0
+                .energy = 0
             };
+        }
+    }
+
+    fn thread(self: *Self) void
+    {
+        while(self.running) {
+            futex_wait(&self.pulse, 0, null) catch unreachable;
+            self.step();
         }
     }
 
@@ -310,11 +355,21 @@ const Game = struct
                     .WALL => continue,
                     .ZAP => "zap",
                     .ROCK => "rock",
-                    .PLANT => if(it.energy > 50.0) "plant3" else if(it.energy > 25.0) "plant2" else "plant1",
+                    .PLANT => "plant",
                     .COW => "cow",
                 };
 
-                rdr.push(content.IMG(img), @intCast(u16, x), @intCast(u16, y), 0xFFFFFF);
+                const scale: u8 = switch(it.type) {
+                    .PLANT => @floatToInt(u8, @intToFloat(f32, it.energy) / 100.0 * 255.0),
+                    else => 255,
+                };
+
+                const rot: u8 = switch(it.type) {
+                    .PLANT => @truncate(u8, hash32(std.mem.asBytes(&.{x,y}))),
+                    else => 0,
+                };
+
+                rdr.push(content.IMG(img), @intCast(u16, x), @intCast(u16, y), scale, rot, 0xFFFFFF);
             }
         }
     }
@@ -388,14 +443,16 @@ export fn frame() void
 
     rdr.newFrame();
 
-    game.step();
+    //game.step();
     game.draw();
+    futex_wake(&game.pulse, 1);
 
     rdr.render();
 }
 
 export fn cleanup() void
 {
+    game.running = false;
     sg.shutdown();
 }
 
@@ -406,18 +463,23 @@ export fn input(ev: ?*const sapp.Event) void
         if(event.key_code == .ESCAPE) {
             sapp.quit();
         }
-        if(event.key_code == .F1) {
+        else if(event.key_code == .F1) {
             //reset Camera
             game.input.zoom = 1.0;
             rdr.cam.pos = vec2.new(0, 0);
         }
-        if(event.key_code == .SPACE) {
+        else if(event.key_code == .SPACE) {
             log("spawn plant");
 
             game.world[10][10] = .{
                 .type = .PLANT,
                 .energy = 0.0
             };
+        }
+        else if(event.key_code == .R) {
+            log("reset");
+
+            game.reset();
         }
     }
     else if(event.type == .MOUSE_SCROLL) {
