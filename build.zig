@@ -34,6 +34,15 @@ fn buildSokol(b: *Builder, target: CrossTarget, mode: Mode, cross_compiling: boo
     lib.setTarget(target);
     lib.setBuildMode(mode);
     lib.linkLibC();
+    lib.linkLibCpp();
+
+    lib.addCSourceFile("src/sokol/c/cimgui.cpp", &.{});
+    lib.addCSourceFile("src/sokol/c/imgui.cpp", &.{});
+    lib.addCSourceFile("src/sokol/c/imgui_demo.cpp", &.{});
+    lib.addCSourceFile("src/sokol/c/imgui_draw.cpp", &.{});
+    lib.addCSourceFile("src/sokol/c/imgui_tables.cpp", &.{});
+    lib.addCSourceFile("src/sokol/c/imgui_widgets.cpp", &.{});
+
     const sokol_path = prefix_path ++ "src/sokol/sokol.c";
     if (lib.target.isDarwin()) {
         lib.addCSourceFile(sokol_path, &.{ "-ObjC" });

@@ -2,6 +2,7 @@ const std   = @import("std");
 const sg    = @import("sokol").gfx;
 const sapp  = @import("sokol").app;
 const sgapp = @import("sokol").app_gfx_glue;
+const imgui = @import("sokol").imgui;
 const shd   = @import("shaders/shaders.zig");
 const math  = @import("math.zig");
 const content = @import("content.zig");
@@ -229,6 +230,8 @@ const Renderer = struct
             sg.draw(0, 6, @intCast(u32, self.tileBatch.items.len));
         }
 
+        imgui.render();
+
         sg.endPass();
         sg.commit();
     }
@@ -412,6 +415,8 @@ export fn init() void
         return;
     }
 
+    imgui.setup(.{});
+
     if(!content.LoadImages()) {
         log("ERROR: Could not load all images");
         sapp.quit();
@@ -423,6 +428,15 @@ export fn init() void
 
 export fn frame() void
 {
+    imgui.newFrame(.{
+        .width = sapp.width(),
+        .height = sapp.height(),
+        .delta_time = sapp.frameDuration(),
+        .dpi_scale = sapp.dpiScale()
+    });
+
+    imgui.showDemoWindow();
+
     // zoom over many frames (smooth zoom)
     // TODO: make this better
     if(rdr.cam.zoom != game.input.zoom) {
@@ -458,6 +472,8 @@ export fn cleanup() void
 
 export fn input(ev: ?*const sapp.Event) void
 {
+    if(imgui.handleEvent(ev)) return;
+
     const event = ev.?;
     if(event.type == .KEY_DOWN) {
         if(event.key_code == .ESCAPE) {

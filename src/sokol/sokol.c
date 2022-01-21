@@ -15,3 +15,8 @@
 #include "c/sokol_gfx.h"
 #include "c/sokol_time.h"
 #include "c/sokol_audio.h"
+
+#define CIMGUI_DEFINE_ENUMS_AND_STRUCTS
+#include "c/cimgui.h"
+#define SOKOL_IMGUI_IMPL
+#include "c/sokol_imgui.h"
