@@ -20,7 +20,9 @@ const futex_wake = std.Thread.Futex.wake;
 const WORLD_WIDTH = 1024;
 const WORLD_HEIGHT = 1024;
 const MAX_TILE_BATCH: usize = 1024*1024;
+const MAX_DBGDRAW_BATCH: usize = 8192;
 const MAX_STEP_SPEED = 100;
+const TILE_SIZE = 32;
 
 fn logf(comptime format: []const u8, args: anytype) void
 {
@@ -57,11 +59,33 @@ fn hash32(data: []const u8) u32
     return h;
 }
 
-comptime { assertSize(Renderer.GpuTileEntry, 12); }
+inline fn CU4(r: f32, g: f32, b: f32, a: f32) u32
+{
+    const ret: u32 = (@floatToInt(u32, r * 255.0)) |
+        (@floatToInt(u32, g * 255.0) << 8) |
+        (@floatToInt(u32, b * 255.0) << 16) |
+        (@floatToInt(u32, a * 255.0) << 24);
+    return ret;
+}
+
+inline fn enumCount(comptime e: type) usize
+{
+    return @typeInfo(e).Enum.fields.len;
+}
+inline fn enumFields(comptime e: type) []const std.builtin.TypeInfo.EnumField
+{
+    return @typeInfo(e).Enum.fields;
+}
+
+comptime {
+    assertSize(Renderer.GpuTileEntry, 12);
+    assertSize(Renderer.GpuDbgDrawEntry, 28);
+}
 
 const Renderer = struct
 {
     const Self = @This();
+
     const GpuTileEntry = packed struct {
         gridx: u16,
         gridy: u16,
@@ -74,85 +98,121 @@ const Renderer = struct
         rot_color: u32
     };
 
+    const GpuDbgDrawEntry = packed struct {
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        rot: f32,
+        color: u32,
+        z: f32
+    };
+
+    const Layer = enum(i32) {
+        BACK = -1,
+        GAME = 0,
+        FRONT = 1
+    };
+
     cam: Camera = .{},
 
-    state: struct
-    {
-        bind: sg.Bindings = .{},
-        pip: sg.Pipeline = .{},
-        pipeTex: sg.Pipeline = .{},
-        pipeTile: sg.Pipeline = .{},
-        pass_action: sg.PassAction = .{},
-    } = .{},
+    bindTiles: sg.Bindings = .{},
+    bindDbgDraw: sg.Bindings = .{},
+    pipeDbgDraw: sg.Pipeline = .{},
+    pipeTex: sg.Pipeline = .{},
+    pipeTile: sg.Pipeline = .{},
+    pass_action: sg.PassAction = .{},
 
-    tileBuffer: sg.Buffer,
-    tileBatch: Array(GpuTileEntry),
+    tileBatch: Array(GpuTileEntry) = undefined,
+    dbgDrawBatch: Array(GpuDbgDrawEntry) = undefined,
+    orderedDbgDrawBatch: Array(GpuDbgDrawEntry) = undefined,
+
+    gpuTileBuffer: sg.Buffer = .{},
+    gpuDbgDrawBuffer: sg.Buffer = .{},
+    countDbgDraw: [enumCount(Layer)]u32 = [_]u32{0} ** enumCount(Layer),
 
     fn init(self: *Self) bool
     {
         const allocator = arena.allocator();
 
         self.tileBatch = Array(GpuTileEntry).initCapacity(allocator, MAX_TILE_BATCH) catch unreachable;
+        self.dbgDrawBatch = Array(GpuDbgDrawEntry).initCapacity(allocator, MAX_DBGDRAW_BATCH) catch unreachable;
+        self.orderedDbgDrawBatch = Array(GpuDbgDrawEntry).initCapacity(allocator, MAX_DBGDRAW_BATCH) catch unreachable;
 
-        // a vertex buffer
-        const vertices = [_]f32 {
+        // centered quad
+        const vertQuadCentered = [_]f32 {
             // positions         uv
             -0.5, -0.5, 0.0,     0, 0,
              0.5, -0.5, 0.0,     1, 0,
              0.5,  0.5, 0.0,     1, 1,
             -0.5,  0.5, 0.0,     0, 1,
         };
-        self.state.bind.vertex_buffers[0] = sg.makeBuffer(.{
-            .data = sg.asRange(vertices)
+        // quad
+        const vertQuad = [_]f32 {
+            // positions
+            0.0, 0.0, 0.0,
+            1.0, 0.0, 0.0,
+            1.0, 1.0, 0.0,
+            0.0, 1.0, 0.0,
+        };
+        self.bindTiles.vertex_buffers[0] = sg.makeBuffer(.{
+            .data = sg.asRange(vertQuadCentered)
+        });
+        self.bindDbgDraw.vertex_buffers[0] = sg.makeBuffer(.{
+            .data = sg.asRange(vertQuad)
         });
 
         // an index buffer
         const indices = [_] u16 { 0, 1, 2,  0, 2, 3 };
-        self.state.bind.index_buffer = sg.makeBuffer(.{
+        self.bindTiles.index_buffer = sg.makeBuffer(.{
+            .type = .INDEXBUFFER,
+            .data = sg.asRange(indices)
+        });
+        self.bindDbgDraw.index_buffer = sg.makeBuffer(.{
             .type = .INDEXBUFFER,
             .data = sg.asRange(indices)
         });
 
-        // a shader and pipeline state object
+        // debug draw pipeline
+        self.gpuDbgDrawBuffer = sg.makeBuffer(.{
+            .usage = .STREAM,
+            .size = MAX_DBGDRAW_BATCH * @sizeOf(GpuDbgDrawEntry)
+        });
+        if(self.gpuDbgDrawBuffer.id == 0) return false;
+        self.bindDbgDraw.vertex_buffers[1] = self.gpuDbgDrawBuffer;
+
         var pip_desc: sg.PipelineDesc = .{
             .index_type = .UINT16,
-            .shader = sg.makeShader(shd.color.colorShaderDesc(sg.queryBackend())),
+            .shader = sg.makeShader(shd.dbgDraw.colorShaderDesc(sg.queryBackend())),
             .depth = .{
                 .compare = .LESS_EQUAL,
                 .write_enabled = true,
             },
             .cull_mode = .BACK,
         };
-        pip_desc.layout.attrs[shd.color.ATTR_vs_position].format = .FLOAT3;
-        pip_desc.layout.attrs[shd.color.ATTR_vs_color0].format = .FLOAT4;
-        self.state.pip = sg.makePipeline(pip_desc);
+        pip_desc.layout.attrs[shd.dbgDraw.ATTR_vs_vert_pos].format = .FLOAT3;
+        // NOTE how the vertex layout is setup for instancing, with the instancing
+        // data provided by buffer-slot 1:
+        pip_desc.layout.buffers[1].stride = @sizeOf(GpuDbgDrawEntry);
+        pip_desc.layout.buffers[1].step_func = .PER_INSTANCE;
+        pip_desc.layout.attrs[shd.dbgDraw.ATTR_vs_inst_pos_size] = .{ .format = .FLOAT4, .buffer_index = 1 };
+        pip_desc.layout.attrs[shd.dbgDraw.ATTR_vs_inst_rot_color_z] = .{ .format = .FLOAT3, .buffer_index = 1, .offset = 16 };
 
-        // a shader and pipeline state object
-        pip_desc = .{
-            .index_type = .UINT16,
-            .shader = sg.makeShader(shd.texture.colorShaderDesc(sg.queryBackend())),
-            .depth = .{
-                .compare = .LESS_EQUAL,
-                .write_enabled = true,
-            },
-            .cull_mode = .BACK
-        };
-        pip_desc.layout.attrs[shd.texture.ATTR_vs_position].format = .FLOAT3;
-        pip_desc.layout.attrs[shd.texture.ATTR_vs_uv0].format = .FLOAT2;
         pip_desc.colors[0].blend = .{
             .enabled = true,
             .src_factor_rgb = .SRC_ALPHA,
             .dst_factor_rgb = .ONE_MINUS_SRC_ALPHA
         };
-        self.state.pipeTex = sg.makePipeline(pip_desc);
+
+        self.pipeDbgDraw = sg.makePipeline(pip_desc);
 
         // tile pipeline
-        self.tileBuffer = sg.makeBuffer(.{
+        self.gpuTileBuffer = sg.makeBuffer(.{
             .usage = .STREAM,
             .size = MAX_TILE_BATCH * @sizeOf(GpuTileEntry)
         });
-        if(self.tileBuffer.id == 0) return false;
-        self.state.bind.vertex_buffers[1] = self.tileBuffer;
+        if(self.gpuTileBuffer.id == 0) return false;
+        self.bindTiles.vertex_buffers[1] = self.gpuTileBuffer;
 
         pip_desc = .{
             .index_type = .UINT16,
@@ -176,14 +236,14 @@ const Renderer = struct
             .dst_factor_rgb = .ONE_MINUS_SRC_ALPHA
         };
 
-        self.state.pipeTile = sg.makePipeline(pip_desc);
+        self.pipeTile = sg.makePipeline(pip_desc);
 
         // clear to grey
-        self.state.pass_action.colors[0] = .{ .action=.CLEAR, .value=.{ .r=0.2, .g=0.2, .b=0.2, .a=1 } };
+        self.pass_action.colors[0] = .{ .action=.CLEAR, .value=.{ .r=0.2, .g=0.2, .b=0.2, .a=1 } };
         return true;
     }
 
-    fn push(self: *Self, imgID: content.ImageID, gridx: u16, gridy: u16, scale: u8, rot: u8, color: u24) void
+    fn drawTile(self: *Self, imgID: content.ImageID, gridx: u16, gridy: u16, scale: u8, rot: u8, color: u24) void
     {
         const info = content.GetGpuImageTileInfo(imgID);
         self.tileBatch.append(.{
@@ -197,9 +257,59 @@ const Renderer = struct
         }) catch unreachable;
     }
 
-    fn newFrame(self: *Self) void
+    fn drawDbgQuad(self: *Self, x: f32, y: f32, z: Layer, w: f32, h: f32, rot: f32, color: u32) void
     {
-        self.tileBatch.clearRetainingCapacity();
+        self.dbgDrawBatch.append(.{
+            .x = x,
+            .y = y,
+            .w = w,
+            .h = h,
+            .rot = rot,
+            .color = color,
+            .z = @intToFloat(f32, @enumToInt(z)),
+        }) catch unreachable;
+    }
+
+    fn drawLine(self: *Self, x1: f32, y1: f32, x2: f32, y2: f32, z: Layer, thickness: f32, color: u32) void
+    {
+        const rot = std.math.atan2(f32, y2 - y1, x2 - x1);
+        const len = vec2.len(.{ .x = x2 - x1, .y = y2 - y1 });
+
+        self.dbgDrawBatch.append(.{
+            .x = x1,
+            .y = y1,
+            .w = len,
+            .h = thickness,
+            .rot = rot,
+            .color = color,
+            .z = @intToFloat(f32, @enumToInt(z)),
+        }) catch unreachable;
+    }
+
+    fn renderLayer(self: *Self, layer: Layer, view: mat4) void
+    {
+        const lyID = inline for(enumFields(Layer)) |L, i| {
+            if(@intToEnum(Layer, L.value) == layer) break i;
+        } else unreachable;
+
+        if(self.orderedDbgDrawBatch.items.len > 0) {
+            var offset: u32 = 0;
+            var i: usize = 0;
+            while(i < lyID): (i += 1) {
+                offset += self.countDbgDraw[i];
+            }
+            self.bindDbgDraw.vertex_buffer_offsets[1] = @intCast(i32, offset * @sizeOf(GpuDbgDrawEntry));
+            
+            sg.applyPipeline(self.pipeDbgDraw);
+            sg.applyBindings(self.bindDbgDraw);
+
+            const vs_params: shd.dbgDraw.VsParams = .{
+                .vp = view,
+            };
+
+            sg.applyUniforms(.VS, shd.dbgDraw.SLOT_vs_params, sg.asRange(vs_params));
+            sg.draw(0, 6, @intCast(u32, self.countDbgDraw[lyID]));
+        }
     }
 
     fn render(self: *Self) void
@@ -213,15 +323,30 @@ const Renderer = struct
         const top = (-hh) * 1.0/self.cam.zoom + self.cam.pos.y;
 
         const view = mat4.ortho(left, right, bottom, top, -10.0, 10.0);
-        
-        sg.beginDefaultPass(self.state.pass_action, sapp.width(), sapp.height());
-        sg.applyPipeline(self.state.pipeTile);
+
+        sg.beginDefaultPass(self.pass_action, sapp.width(), sapp.height());
+
+        self.orderedDbgDrawBatch.clearRetainingCapacity();
+        self.countDbgDraw = [_]u32{0} ** enumCount(Layer);
+        inline for(enumFields(Layer)) |L, i| {
+            for(self.dbgDrawBatch.items) |it| {
+                const l = @floatToInt(i32, it.z);
+                if(l == L.value) {
+                    self.orderedDbgDrawBatch.append(it) catch unreachable;
+                    self.countDbgDraw[i] += 1;
+                }
+            }
+        }
+        sg.updateBuffer(self.bindDbgDraw.vertex_buffers[1], sg.asRange(self.orderedDbgDrawBatch.items));
+
+        self.renderLayer(.BACK, view);
 
         if(self.tileBatch.items.len > 0) {
-            sg.updateBuffer(self.state.bind.vertex_buffers[1], sg.asRange(self.tileBatch.items));
+            sg.applyPipeline(self.pipeTile);
+            sg.updateBuffer(self.bindTiles.vertex_buffers[1], sg.asRange(self.tileBatch.items));
 
-            self.state.bind.fs_images[0] = content.GetGpuImage(.{ .img = 0, .tile = 0 });
-            sg.applyBindings(self.state.bind);
+            self.bindTiles.fs_images[0] = content.GetGpuImage(.{ .img = 0, .tile = 0 });
+            sg.applyBindings(self.bindTiles);
 
             const vs_params: shd.tile.VsParams = .{
                 .vp = view,
@@ -231,10 +356,16 @@ const Renderer = struct
             sg.draw(0, 6, @intCast(u32, self.tileBatch.items.len));
         }
 
+        self.renderLayer(.GAME, view);
+        self.renderLayer(.FRONT, view);
+
         imgui.render();
 
         sg.endPass();
         sg.commit();
+
+        self.tileBatch.clearRetainingCapacity();
+        self.dbgDrawBatch.clearRetainingCapacity();
     }
 };
 
@@ -368,7 +499,7 @@ const Game = struct
                 };
 
                 const scale: u8 = switch(it.type) {
-                    .PLANT => @floatToInt(u8, @intToFloat(f32, it.energy) / 100.0 * 255.0),
+                    .PLANT => @floatToInt(u8, @intToFloat(f32, std.math.min(it.energy, 100)) / 100.0 * 255.0),
                     else => 255,
                 };
 
@@ -377,9 +508,21 @@ const Game = struct
                     else => 0,
                 };
 
-                rdr.push(content.IMG(img), @intCast(u16, x), @intCast(u16, y), scale, rot, 0xFFFFFF);
+                rdr.drawTile(content.IMG(img), @intCast(u16, x), @intCast(u16, y), scale, rot, 0xFFFFFF);
             }
         }
+
+        // draw grid
+        if(rdr.cam.zoom > 0.3) {
+            var i: i32 = 0;
+            while(i < WORLD_WIDTH+1): (i += 1) {
+                const f = @intToFloat(f32, i);
+                rdr.drawLine(0.0, f * TILE_SIZE, WORLD_WIDTH * TILE_SIZE, f * TILE_SIZE, .GAME, 1.0/rdr.cam.zoom, comptime CU4(1, 1, 1, 0.1));
+                rdr.drawLine(f * TILE_SIZE, 0.0, f * TILE_SIZE, WORLD_WIDTH * TILE_SIZE, .GAME, 1.0/rdr.cam.zoom, comptime CU4(1, 1, 1, 0.1));
+            }
+        }
+        
+        rdr.drawDbgQuad(0, 0, .BACK, WORLD_WIDTH * TILE_SIZE, WORLD_WIDTH * TILE_SIZE, 0.0, comptime CU4(0, 0, 0, 1));
     }
 
     fn signalStep(self: *Self) void
@@ -388,7 +531,7 @@ const Game = struct
     }
 };
 
-var rdr: Renderer = undefined;
+var rdr: Renderer = .{};
 var game: Game = .{};
 
 var arena: std.heap.ArenaAllocator = undefined; // initialized in main
@@ -483,13 +626,10 @@ export fn frame() void
 
     doUi();
 
-    rdr.newFrame();
-
     if(skippedSteps == 0) {
         skippedSteps = MAX_STEP_SPEED - game.speed;
     }
 
-    //game.step();
     game.draw();
     if(skippedSteps > 0) {
         skippedSteps -= 1;

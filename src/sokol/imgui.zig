@@ -1,5 +1,6 @@
 const sapp = @import("app.zig");
 
+// sokol_imgui.h
 const PixelFormat = enum(u32) {
     _SG_PIXELFORMAT_DEFAULT,    // value 0 reserved for default-init
     SG_PIXELFORMAT_NONE,
@@ -92,7 +93,6 @@ const FrameDesc = extern struct {
     dpi_scale: f32,
 };
 
-// sokol_imgui.h
 pub extern fn simgui_setup([*c]const Desc) void;
 pub extern fn simgui_new_frame([*c]const FrameDesc) void;
 pub extern fn simgui_render() void;

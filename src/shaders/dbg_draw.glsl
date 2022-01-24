@@ -7,13 +7,13 @@ uniform vs_params {
 };
 
 in vec3 vert_pos;
-in vec2 vert_uv;
-in uvec3 tile; // instanced
 
-out vec2 uv;
-out vec3 color;
+// instanced
+in vec4 inst_pos_size;
+in vec3 inst_rot_color_z;
 
-const float TILE_SIZE = 32.0;
+out vec4 color;
+
 const float pi = 3.14159265359;
 
 mat4 mat4translate(vec3 v)
@@ -55,25 +55,13 @@ mat4 mat4rotZ(float a)
 
 void main()
 {
-    uint tx = tile.x & 0xFFFF;
-    uint ty = (tile.x >> 16) & 0xFFFF;
-    uint ti = tile.y & 0xFF;
-    uint tw = (tile.y >> 8) & 0xFF;
-    uint th = (tile.y >> 16) & 0xFF;
-    uint tscale = (tile.y >> 24) & 0xFF;
-    uint trot = tile.z & 0xFF;
-    uint tcol = (tile.z >> 8) & 0xFFFFFF;
-
-    float ix = ti % tw;
-    float iy = ti / th;
-
-    vec3 pos = vec3(tx * TILE_SIZE + TILE_SIZE * 0.5, ty * TILE_SIZE + TILE_SIZE * 0.5, 0);
-    vec3 scale = vec3(TILE_SIZE * (tscale / 255.0), TILE_SIZE * (tscale / 255.0), 1);
-    float rot = trot / 255.0 * pi * 2.0;
+    vec3 pos = vec3(inst_pos_size.xy, inst_rot_color_z.z);
+    vec3 scale = vec3(inst_pos_size.zw, 1);
+    float rot = inst_rot_color_z.x;
+    uint c4 = floatBitsToUint(inst_rot_color_z.y);
 
     gl_Position = vp * mat4translate(pos) * mat4rotZ(rot) * mat4scale(scale) * vec4(vert_pos.xy, 0.0, 1.0);
-    uv = vec2(ix/tw + vert_uv.x * (1.0/tw), iy/th + vert_uv.y * (1.0)/th);
-    color = vec3((tcol & 0xFF) / 255.0, ((tcol >> 8) & 0xFF) / 255.0, ((tcol >> 16) & 0xFF) / 255.0);
+    color = vec4((c4 & 0xFF) / 255.0, ((c4 >> 8) & 0xFF) / 255.0, ((c4 >> 16) & 0xFF) / 255.0, ((c4 >> 24) & 0xFF) / 255.0);
 }
 @end
 
@@ -81,15 +69,13 @@ void main()
 @fs fs
 uniform sampler2D tex;
 
-in vec2 uv;
-in vec3 color;
+in vec4 color;
 
 out vec4 frag_color;
 
 void main()
 {
-    frag_color = texture(tex, uv) * vec4(color, 1.0);
-    //frag_color = vec4(uv, 0.0, 1.0);
+    frag_color = color;
 }
 @end
 

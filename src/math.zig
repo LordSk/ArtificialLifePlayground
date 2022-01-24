@@ -30,6 +30,10 @@ pub const Vec2 = packed struct {
             .y = left.y + right.y
         };
     }
+
+    pub fn len(v: Vec2) f32 {
+        return math.sqrt(v.x * v.x + v.y * v.y);
+    }
 };
 
 pub const Vec3 = packed struct {
