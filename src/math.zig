@@ -159,17 +159,13 @@ pub const Mat4 = packed struct {
     }
 
     pub fn ortho(left: f32, right: f32, bottom: f32, top: f32, near: f32, far: f32) Mat4 {
-        var res = Mat4.zero();
-        const rl  = 1.0 / (right  - left);
-        const tb  = 1.0 / (top    - bottom);
-        const fne =-1.0 / (far - near);
-
-        res.m[0][0] = 2.0 * rl;
-        res.m[1][1] = 2.0 * tb;
-        res.m[2][2] = 2.0 * fne;
-        res.m[3][0] =-(right  + left)    * rl;
-        res.m[3][1] =-(top    + bottom)  * tb;
-        res.m[3][2] = (far + near) * fne;
+        var res = Mat4.identity();
+        res.m[0][0] = 2.0 / (right - left);
+        res.m[1][1] = 2.0 / (top - bottom);
+        res.m[2][2] = 2.0 / (near - far);
+        res.m[3][0] = (left + right) / (left - right);
+        res.m[3][1] = (bottom + top) / (bottom - top);
+        res.m[3][2] = (far + near) / (near - far);
         res.m[3][3] = 1.0;
         return res;
     }

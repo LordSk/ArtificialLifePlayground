@@ -10,7 +10,7 @@ in vec3 vert_pos;
 
 // instanced
 in vec4 inst_pos_size;
-in vec3 inst_rot_color_z;
+in vec3 inst_rcz;
 
 out vec4 color;
 
@@ -55,10 +55,10 @@ mat4 mat4rotZ(float a)
 
 void main()
 {
-    vec3 pos = vec3(inst_pos_size.xy, inst_rot_color_z.z);
+    vec3 pos = vec3(inst_pos_size.xy, inst_rcz.z);
     vec3 scale = vec3(inst_pos_size.zw, 1);
-    float rot = inst_rot_color_z.x;
-    uint c4 = floatBitsToUint(inst_rot_color_z.y);
+    float rot = inst_rcz.x;
+    uint c4 = floatBitsToUint(inst_rcz.y);
 
     gl_Position = vp * mat4translate(pos) * mat4rotZ(rot) * mat4scale(scale) * vec4(vert_pos.xy, 0.0, 1.0);
     color = vec4((c4 & 0xFF) / 255.0, ((c4 >> 8) & 0xFF) / 255.0, ((c4 >> 16) & 0xFF) / 255.0, ((c4 >> 24) & 0xFF) / 255.0);

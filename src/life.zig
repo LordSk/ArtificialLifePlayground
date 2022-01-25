@@ -133,6 +133,10 @@ const Renderer = struct
 
     fn init(self: *Self) bool
     {
+        sg.setup(.{
+            .context = sgapp.context()
+        });
+
         const allocator = arena.allocator();
 
         self.tileBatch = Array(GpuTileEntry).initCapacity(allocator, MAX_TILE_BATCH) catch unreachable;
@@ -191,12 +195,11 @@ const Renderer = struct
             .cull_mode = .BACK,
         };
         pip_desc.layout.attrs[shd.dbgDraw.ATTR_vs_vert_pos].format = .FLOAT3;
-        // NOTE how the vertex layout is setup for instancing, with the instancing
-        // data provided by buffer-slot 1:
+        // instanced
         pip_desc.layout.buffers[1].stride = @sizeOf(GpuDbgDrawEntry);
         pip_desc.layout.buffers[1].step_func = .PER_INSTANCE;
         pip_desc.layout.attrs[shd.dbgDraw.ATTR_vs_inst_pos_size] = .{ .format = .FLOAT4, .buffer_index = 1 };
-        pip_desc.layout.attrs[shd.dbgDraw.ATTR_vs_inst_rot_color_z] = .{ .format = .FLOAT3, .buffer_index = 1, .offset = 16 };
+        pip_desc.layout.attrs[shd.dbgDraw.ATTR_vs_inst_rcz] = .{ .format = .FLOAT3, .buffer_index = 1, .offset = 16 };
 
         pip_desc.colors[0].blend = .{
             .enabled = true,
@@ -225,8 +228,7 @@ const Renderer = struct
         };
         pip_desc.layout.attrs[shd.tile.ATTR_vs_vert_pos].format = .FLOAT3;
         pip_desc.layout.attrs[shd.tile.ATTR_vs_vert_uv].format = .FLOAT2;
-        // NOTE how the vertex layout is setup for instancing, with the instancing
-        // data provided by buffer-slot 1:
+        // instanced
         pip_desc.layout.buffers[1].step_func = .PER_INSTANCE;
         pip_desc.layout.attrs[shd.tile.ATTR_vs_tile] = .{ .format = .FLOAT3, .buffer_index = 1 }; // instance positions
 
@@ -286,9 +288,9 @@ const Renderer = struct
         }) catch unreachable;
     }
 
-    fn renderLayer(self: *Self, layer: Layer, view: mat4) void
+    fn renderLayer(self: *Self, comptime layer: Layer, view: mat4) void
     {
-        const lyID = inline for(enumFields(Layer)) |L, i| {
+        const lyID = comptime for(enumFields(Layer)) |L, i| {
             if(@intToEnum(Layer, L.value) == layer) break i;
         } else unreachable;
 
@@ -317,12 +319,19 @@ const Renderer = struct
         const hw = sapp.widthf() / 2.0;
         const hh = sapp.heightf() / 2.0;
 
-        const left = (-hw) * 1.0/self.cam.zoom + self.cam.pos.x;
-        const right = (hw) * 1.0/self.cam.zoom + self.cam.pos.x;
-        const bottom = (hh) * 1.0/self.cam.zoom + self.cam.pos.y;
-        const top = (-hh) * 1.0/self.cam.zoom + self.cam.pos.y;
+        const left = (-hw) * 1.0/self.cam.zoom;
+        const right = (hw) * 1.0/self.cam.zoom;
+        const bottom = (hh) * 1.0/self.cam.zoom;
+        const top = (-hh) * 1.0/self.cam.zoom;
 
-        const view = mat4.ortho(left, right, bottom, top, -10.0, 10.0);
+        const proj = mat4.ortho(left, right, bottom, top, -100.0, 100.0);
+        const view = mat4.lookat(
+            vec3.new(self.cam.pos.x, self.cam.pos.y, 10),
+            vec3.new(self.cam.pos.x, self.cam.pos.y, 0),
+            vec3.new(0, 1, 0)
+        );
+
+        const vp = mat4.mul(proj, view);
 
         sg.beginDefaultPass(self.pass_action, sapp.width(), sapp.height());
 
@@ -337,9 +346,10 @@ const Renderer = struct
                 }
             }
         }
+
         sg.updateBuffer(self.bindDbgDraw.vertex_buffers[1], sg.asRange(self.orderedDbgDrawBatch.items));
 
-        self.renderLayer(.BACK, view);
+        self.renderLayer(.BACK, vp);
 
         if(self.tileBatch.items.len > 0) {
             sg.applyPipeline(self.pipeTile);
@@ -349,15 +359,15 @@ const Renderer = struct
             sg.applyBindings(self.bindTiles);
 
             const vs_params: shd.tile.VsParams = .{
-                .vp = view,
+                .vp = vp,
             };
 
             sg.applyUniforms(.VS, shd.tile.SLOT_vs_params, sg.asRange(vs_params));
             sg.draw(0, 6, @intCast(u32, self.tileBatch.items.len));
         }
 
-        self.renderLayer(.GAME, view);
-        self.renderLayer(.FRONT, view);
+        self.renderLayer(.GAME, vp);
+        self.renderLayer(.FRONT, vp);
 
         imgui.render();
 
@@ -393,7 +403,8 @@ const Game = struct
     {
         zoom: f32 = 1.0,
         grabMove: bool = false,
-        mouseMove: vec2 = vec2.new(0, 0)
+        mouseMove: vec2 = vec2.new(0, 0),
+        mousePos: vec2 = vec2.new(0, 0)
     } = .{},
 
     world: [WORLD_WIDTH][WORLD_HEIGHT]Tile = undefined,
@@ -522,12 +533,23 @@ const Game = struct
             }
         }
         
-        rdr.drawDbgQuad(0, 0, .BACK, WORLD_WIDTH * TILE_SIZE, WORLD_WIDTH * TILE_SIZE, 0.0, comptime CU4(0, 0, 0, 1));
+        rdr.drawDbgQuad(0, 0, .BACK, WORLD_WIDTH * TILE_SIZE, WORLD_WIDTH * TILE_SIZE, 0.0, 0xFF0d131e);
+
+        const tm = self.getGridMousePos();
+
+        rdr.drawDbgQuad(tm.x * TILE_SIZE, tm.y * TILE_SIZE, .FRONT, TILE_SIZE, TILE_SIZE, 0.0, comptime CU4(1, 0, 1, 0.2));
     }
 
     fn signalStep(self: *Self) void
     {
         futex_wake(&self.pulse, 1);
+    }
+
+    fn getGridMousePos(self: Self) vec2
+    {
+        const tmx = @floor(((self.input.mousePos.x - sapp.widthf() /2.0)/rdr.cam.zoom + rdr.cam.pos.x) / TILE_SIZE);
+        const tmy = @floor(((self.input.mousePos.y - sapp.heightf()/2.0)/rdr.cam.zoom + rdr.cam.pos.y) / TILE_SIZE);
+        return vec2.new(tmx, tmy);
     }
 };
 
@@ -558,10 +580,6 @@ export fn init() void
 {
     sapp.lockMouse(false); // show cursor
 
-    sg.setup(.{
-        .context = sgapp.context()
-    });
-
     if(!rdr.init()) {
         log("ERROR: Could not init renderer");
         sapp.quit();
@@ -583,7 +601,7 @@ fn doUi() void
 {
     imgui.showDemoWindow();
 
-    if(imgui.begin("Settings")) {
+    if(imgui.begin("Simulation")) {
         if(imgui.button("Reset")) {
             game.reset();
         }
@@ -696,6 +714,7 @@ export fn input(ev: ?*const sapp.Event) void
     else if(event.type == .MOUSE_MOVE) {
         game.input.mouseMove.x += event.mouse_dx;
         game.input.mouseMove.y += event.mouse_dy;
+        game.input.mousePos = .{ .x = event.mouse_x, .y = event.mouse_y };
     }
 }
 
@@ -712,6 +731,6 @@ pub fn main() void
         .width = 1920,
         .height = 1080,
         .window_title = "Life",
-        .swap_interval = 0
+        .swap_interval = 0,
     });
 }
