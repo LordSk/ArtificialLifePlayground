@@ -13,7 +13,7 @@ const mat4 = math.Mat4;
 
 const Array = std.ArrayList;
 
-const MAX_TILE_BATCH: usize = 1024*1024;
+const MAX_TILE_BATCH: usize = 1024*1024 + 64;
 const MAX_DBGDRAW_BATCH: usize = 8192;
 
 const Camera = struct {

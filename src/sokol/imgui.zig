@@ -1,4 +1,5 @@
 const sapp = @import("app.zig");
+const sg = @import("gfx.zig");
 
 // sokol_imgui.h
 const PixelFormat = enum(u32) {
@@ -114,10 +115,17 @@ pub fn handleEvent(ev: ?*const sapp.Event) bool {
 // cimgui.h
 const ImGuiWindowFlags = i32;
 const ImGuiSliderFlags = i32;
-const ImVec2 = extern struct {
+pub const ImVec2 = extern struct {
     x: f32,
     y: f32
 };
+pub const ImVec4 = extern struct {
+    x: f32,
+    y: f32,
+    z: f32,
+    w: f32,
+};
+pub const ImTextureID = *anyopaque;
 
 pub extern fn igShowDemoWindow(p_open: [*c]bool) void;
 pub extern fn igBegin(name: [*:0]const u8, p_open: [*c]bool, flags: ImGuiWindowFlags) bool;
@@ -125,6 +133,11 @@ pub extern fn igEnd() void;
 pub extern fn igButton(label: [*:0]const u8, size: ImVec2) bool;
 pub extern fn igSliderInt(label: [*:0]const u8, v: [*c]i32, v_min: i32, v_max: i32, format: ?[*:0]const u8, flags: ImGuiSliderFlags) bool;
 pub extern fn igCheckbox(label: [*:0]const u8, v: *bool) bool;
+pub extern fn igImageButton(user_texture_id: ImTextureID, size: ImVec2, uv0: ImVec2, uv1: ImVec2, frame_padding: i32, bg_col: ImVec4, tint_col: ImVec4) bool;
+pub extern fn igSameLine(offset_from_start_x: f32, spacing: f32) void;
+pub extern fn igImage(user_texture_id: ImTextureID, size: ImVec2, uv0: ImVec2, uv1: ImVec2, tint_col: ImVec4, border_col: ImVec4) void;
+pub extern fn igPushID_Int(id: i32) void;
+pub extern fn igPopID() void;
 
 pub fn showDemoWindow() void
 {
@@ -154,4 +167,32 @@ pub fn sliderInt(label: [*:0]const u8, val: *i32, v_min: i32, v_max: i32) bool
 pub fn checkbox(label: [*:0]const u8, v: *bool) bool
 {
     return igCheckbox(label, v);
+}
+
+pub fn imageButton(user_texture_id: sg.Image, size: ImVec2, uv0: ImVec2, uv1: ImVec2, bg_col: ImVec4, tint_col: ImVec4) bool
+{
+    return igImageButton(@intToPtr(*anyopaque, user_texture_id.id), size, uv0, uv1, -1, bg_col, tint_col);
+}
+
+pub fn sameLine() void
+{
+    igSameLine(0, -1);
+}
+
+pub fn image(user_texture_id: sg.Image, size: ImVec2, uv0: ImVec2, uv1: ImVec2) void
+{
+    return igImage(@intToPtr(*anyopaque, user_texture_id.id), size, uv0, uv1,
+        .{ .x=1, .y=1, .z=1, .w=1 },
+        .{ .x=1, .y=1, .z=1, .w=1 }
+    );
+}
+
+pub fn pushID(id: i32) void
+{
+    igPushID_Int(id);
+}
+
+pub fn popID() void
+{
+    igPopID();
 }

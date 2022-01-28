@@ -15,8 +15,8 @@ const Array = std.ArrayList;
 const futex_wait = std.Thread.Futex.wait;
 const futex_wake = std.Thread.Futex.wake;
 
-const WORLD_WIDTH = 1024;
-const WORLD_HEIGHT = 1024;
+const WORLD_WIDTH = 100;
+const WORLD_HEIGHT = 100;
 const MAX_STEP_SPEED = 100;
 const TILE_SIZE = 32;
 
@@ -66,7 +66,14 @@ const Game = struct
 
     const Tile = struct {
         type: EntityType,
-        energy: u8
+        energy: i8
+    };
+
+    const ClickAction = enum {
+        ADD_ROCK,
+        ADD_PLANT,
+        ADD_COW,
+        ZAP,
     };
 
     running: bool = true,
@@ -86,6 +93,8 @@ const Game = struct
     dontWaitToStep: bool = false,
 
     configShowGrid: bool = false,
+
+    clickAction: ClickAction = .ADD_ROCK,
 
     fn init(self: *Self) void
     {
@@ -126,12 +135,86 @@ const Game = struct
 
                             if(self.world[udy][udx].type != .EMPTY) continue;
 
-                            it.energy -= @intCast(u8, randi(35, 50));
+                            const offspringEnergy = @intCast(i8, randi(20, 35));
+                            it.energy -= offspringEnergy;
 
                             self.world[udy][udx] = .{
                                 .type = .PLANT,
-                                .energy = 20
+                                .energy = offspringEnergy
                             };
+                        }
+                    },
+
+                    .COW => {
+                        var cur = &self.world[y][x];
+                        cur.energy -= 2;
+                        if(cur.energy <= 0) {
+                            cur.* = .{
+                                .type = .EMPTY,
+                                .energy = 0
+                            };
+                            continue;
+                        }
+
+                        var dx: i32 = -1;
+                        var dy: i32 = -1;
+                        while(dx < 0 or dx >= WORLD_WIDTH or dy < 0 or dy >= WORLD_HEIGHT) {
+                            dx = @intCast(i32, x) + randi(-1, 1);
+                            dy = @intCast(i32, y) + randi(-1, 1);
+                        }
+
+                        const udx = @intCast(usize, dx);
+                        const udy = @intCast(usize, dy);
+
+                        var spot = &self.world[udy][udx];
+
+                        const reproduce = cur.energy > 80 and randi(0, 8) == 0;
+                        const offspringEnergy = @intCast(i8, randi(20, 35));
+
+                        switch(spot.type) {
+                            .EMPTY => {
+                                spot.* = .{
+                                    .type = .COW,
+                                    .energy = cur.energy,
+                                };
+
+                                if(reproduce) {
+                                    cur.* = .{
+                                        .type = .COW,
+                                        .energy = offspringEnergy
+                                    };
+                                    spot.energy -= offspringEnergy;
+                                }
+                                else {
+                                    cur.* = .{
+                                        .type = .EMPTY,
+                                        .energy = 0
+                                    };
+                                }
+                            },
+                            
+                            .PLANT => {
+                                spot.* = .{
+                                    .type = .COW,
+                                    .energy = @intCast(i8, std.math.min(100, @intCast(u32, cur.energy) + 50)),
+                                };
+
+                                if(reproduce) {
+                                    cur.* = .{
+                                        .type = .COW,
+                                        .energy = offspringEnergy
+                                    };
+                                    spot.energy -= offspringEnergy;
+                                }
+                                else {
+                                    cur.* = .{
+                                        .type = .EMPTY,
+                                        .energy = 0
+                                    };
+                                }
+                            },
+
+                            else => {},
                         }
                     },
 
@@ -147,7 +230,7 @@ const Game = struct
             }
         }
 
-        const zapCount = randi(0, 512);
+        const zapCount = randi(0, WORLD_WIDTH* WORLD_HEIGHT / 2048);
         var z: i32 = 0;
         while(z < zapCount): (z += 1) {
             const ux = @intCast(usize, randi(0, WORLD_WIDTH-1));
@@ -175,16 +258,16 @@ const Game = struct
         for(self.world) |col, y| {
             for(col) |it, x| {
                 const img = switch(it.type) {
-                    .EMPTY => continue,
-                    .WALL => continue,
                     .ZAP => "zap",
                     .ROCK => "rock",
                     .PLANT => "plant",
                     .COW => "cow",
+                    else => continue,
                 };
 
                 const scale: u8 = switch(it.type) {
                     .PLANT => @floatToInt(u8, @intToFloat(f32, std.math.min(it.energy, 100)) / 100.0 * 255.0),
+                    .COW => std.math.max(50, @floatToInt(u8, @intToFloat(f32, std.math.min(it.energy, 100)) / 100.0 * 255.0)),
                     else => 255,
                 };
 
@@ -214,6 +297,16 @@ const Game = struct
         // mouse hover
         const tm = self.getGridMousePos();
         rdr.drawDbgQuad(tm.x * TILE_SIZE, tm.y * TILE_SIZE, .FRONT, TILE_SIZE, TILE_SIZE, 0.0, comptime CU4(1, 0, 1, 0.2));
+
+        if(tm.x >= 0 and tm.x < WORLD_WIDTH and tm.y >= 0 and tm.y < WORLD_HEIGHT) {
+            const imgID = content.IMG(switch(self.clickAction) {
+                .ADD_ROCK => "rock",
+                .ADD_PLANT => "plant",
+                .ADD_COW => "cow",
+                .ZAP => "zap",
+            });
+            rdr.drawTile(imgID, @floatToInt(u16, tm.x), @floatToInt(u16, tm.y), 255, 0, 0xFFC8FF);
+        }
     }
 
     fn signalStep(self: *Self) void
@@ -273,6 +366,58 @@ export fn init() void
     game.init();
 }
 
+fn uiImageButton(imgID: content.ImageID, selected: bool) bool
+{
+    const img = content.GetGpuImage(imgID);
+    const tile = content.GetGpuImageTileInfo(imgID);
+
+    const ix = @intToFloat(f32, tile.index % tile.divw);
+    const iy = @intToFloat(f32, tile.index / tile.divh);
+    const tw = @intToFloat(f32, tile.divw);
+    const th = @intToFloat(f32, tile.divh);
+
+    const uv0: imgui.ImVec2 = .{
+        .x = ix/tw,
+        .y = iy/th,
+    };
+
+    const uv1: imgui.ImVec2 = .{
+        .x = uv0.x + 1.0/tw,
+        .y = uv0.y + 1.0/th
+    };
+
+    const bgColor: imgui.ImVec4 = if(selected) .{ .x=1, .y=0, .z=0, .w=1 } else .{ .x=0, .y=0, .z=0, .w=0 };
+    const tintColor: imgui.ImVec4 = .{ .x=1, .y=1, .z=1, .w=1 };
+
+    imgui.pushID(@intCast(i32, @intCast(u32, imgID.img) << 16 | imgID.tile));
+    const r = imgui.imageButton(img, .{ .x=32, .y=32 }, uv0, uv1, bgColor, tintColor);
+    imgui.popID();
+    return r;
+}
+
+fn uiImage(imgID: content.ImageID) void
+{
+    const img = content.GetGpuImage(imgID);
+    const tile = content.GetGpuImageTileInfo(imgID);
+
+    const ix = @intToFloat(f32, tile.index % tile.divw);
+    const iy = @intToFloat(f32, tile.index / tile.divh);
+    const tw = @intToFloat(f32, tile.divw);
+    const th = @intToFloat(f32, tile.divh);
+
+    const uv0: imgui.ImVec2 = .{
+        .x = ix/tw,
+        .y = iy/th,
+    };
+
+    const uv1: imgui.ImVec2 = .{
+        .x = uv0.x + 1.0/tw,
+        .y = uv0.y + 1.0/th
+    };
+
+    imgui.image(img, .{ .x=32, .y=32 }, uv0, uv1);
+}
+
 fn doUi() void
 {
     imgui.showDemoWindow();
@@ -284,6 +429,29 @@ fn doUi() void
         _ = imgui.sliderInt("Speed", &game.speed, 0, MAX_STEP_SPEED);
         if(imgui.checkbox("Max speed", &game.dontWaitToStep)) {
             game.signalStep();
+        }
+    }
+    imgui.end();
+
+    if(imgui.begin("Options")) {
+        _ = imgui.checkbox("Show grid", &game.configShowGrid);
+    }
+    imgui.end();
+
+    if(imgui.begin("Actions")) {
+        const actions = .{
+            .{ "rock", .ADD_ROCK },
+            .{ "plant", .ADD_PLANT },
+            .{ "cow", .ADD_COW },
+            .{ "zap", .ZAP },
+        };
+
+        inline for(actions) |a, i| {
+            if(uiImageButton(comptime content.IMG(a[0]), game.clickAction == a[1])) {
+                game.clickAction = a[1];
+            }
+            
+            if(i+1 < actions.len) imgui.sameLine();
         }
     }
     imgui.end();
@@ -385,6 +553,32 @@ export fn input(ev: ?*const sapp.Event) void
     else if(event.type == .MOUSE_DOWN) {
         if(event.mouse_button == .MIDDLE) {
             game.input.grabMove = true;
+        }
+        else if(event.mouse_button == .LEFT) {
+            const tm = game.getGridMousePos();
+
+            if(tm.x >= 0 and tm.x < WORLD_WIDTH and tm.y >= 0 and tm.y < WORLD_HEIGHT) {
+                const tmi = .{ @floatToInt(u32, tm.x), @floatToInt(u32, tm.y) };
+
+                switch(game.clickAction) {
+                    .ADD_ROCK => game.world[tmi[1]][tmi[0]] = .{
+                        .type = .ROCK,
+                        .energy = 100
+                    },
+                    .ADD_PLANT => game.world[tmi[1]][tmi[0]] = .{
+                        .type = .PLANT,
+                        .energy = 100
+                    },
+                    .ADD_COW => game.world[tmi[1]][tmi[0]] = .{
+                        .type = .COW,
+                        .energy = 100
+                    },
+                    .ZAP => game.world[tmi[1]][tmi[0]] = .{
+                        .type = .ZAP,
+                        .energy = 100
+                    },
+                }
+            }
         }
     }
     else if(event.type == .MOUSE_MOVE) {
