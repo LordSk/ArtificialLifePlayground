@@ -15,8 +15,8 @@ const Array = std.ArrayList;
 const futex_wait = std.Thread.Futex.wait;
 const futex_wake = std.Thread.Futex.wake;
 
-const WORLD_WIDTH = 100;
-const WORLD_HEIGHT = 100;
+const WORLD_WIDTH = 1024;
+const WORLD_HEIGHT = 1024;
 const MAX_STEP_SPEED = 100;
 const TILE_SIZE = 32;
 
@@ -51,13 +51,64 @@ inline fn CU4(r: f32, g: f32, b: f32, a: f32) u32
     return ret;
 }
 
+fn fmod(f: f32, mod: f32) f32
+{
+    const d = @floor(f / mod);
+    return f - (mod * d);
+}
+
+fn hueToRGBA(hue: u8) u32
+{
+    const H = @intToFloat(f32, hue) / 255.0 * 360.0;
+    const C = 1.0;
+    const X = C * (1.0 - std.math.absFloat(fmod(H/60.0, 2) - 1));
+    var r: f32 = 0.0;
+    var g: f32 = 0.0;
+    var b: f32 = 0.0;
+
+    if(H >= 0 and H < 60){
+        r = C;
+        g = X;
+        b = 0;
+    }
+    else if(H >= 60 and H < 120){
+        r = X;
+        g = C;
+        b = 0;
+    }
+    else if(H >= 120 and H < 180){
+        r = 0;
+        g = C;
+        b = X;
+    }
+    else if(H >= 180 and H < 240){
+        r = 0;
+        g = X;
+        b = C;
+    }
+    else if(H >= 240 and H < 300){
+        r = X;
+        g = 0;
+        b = C;
+    }
+    else{
+        r = C;
+        g = 0;
+        b = X;
+    }
+
+    return CU4(r, g, b, 1.0);
+}
+
 const EntityType = enum(u8) {
     EMPTY,
     WALL,
     ZAP,
     ROCK,
     PLANT,
-    COW
+    COW,
+    PLANT_MUTANT,
+    COW_MUTANT
 };
 
 const Game = struct
@@ -66,13 +117,16 @@ const Game = struct
 
     const Tile = struct {
         type: EntityType,
-        energy: i8
+        energy: i8,
+        hue: u8 = 0,
     };
 
     const ClickAction = enum {
         ADD_ROCK,
         ADD_PLANT,
         ADD_COW,
+        ADD_PLANT_MUTANT,
+        ADD_COW_MUTANT,
         ZAP,
     };
 
@@ -114,109 +168,145 @@ const Game = struct
         }
     }
 
+    fn stepPlant(self: *Self, it: *Tile, x: usize, y: usize) void
+    {
+        it.energy += 5;
+        if(it.energy > 100) it.energy = 100;
+
+        if(it.energy > 50 and randi(0, 10) == 0) {
+            const dx = @intCast(i32, x) + randi(-1, 1);
+            const dy = @intCast(i32, y) + randi(-1, 1);
+
+            if(dx < 0 or dx >= WORLD_WIDTH) return;
+            if(dy < 0 or dy >= WORLD_HEIGHT) return;
+
+            const udx = @intCast(usize, dx);
+            const udy = @intCast(usize, dy);
+
+            if(self.world[udy][udx].type != .EMPTY) return;
+
+            const offspringEnergy = @intCast(i8, randi(20, 35));
+            it.energy -= offspringEnergy;
+
+            self.world[udy][udx] = .{
+                .type = .PLANT,
+                .energy = offspringEnergy
+            };
+        }
+    }
+
+    fn stepCow(self: *Self, it: *Tile, x: usize, y: usize) void
+    {
+        it.energy -= 2;
+        if(it.energy <= 0) {
+            it.* = .{
+                .type = .EMPTY,
+                .energy = 0
+            };
+            return;
+        }
+
+        var dx: i32 = -1;
+        var dy: i32 = -1;
+        while(dx < 0 or dx >= WORLD_WIDTH or dy < 0 or dy >= WORLD_HEIGHT) {
+            dx = @intCast(i32, x) + randi(-1, 1);
+            dy = @intCast(i32, y) + randi(-1, 1);
+        }
+
+        const udx = @intCast(usize, dx);
+        const udy = @intCast(usize, dy);
+
+        var spot = &self.world[udy][udx];
+
+        const reproduce = it.energy > 80 and randi(0, 8) == 0;
+        const offspringEnergy = @intCast(i8, randi(20, 35));
+
+        switch(spot.type) {
+            .EMPTY => {
+                spot.* = .{
+                    .type = .COW,
+                    .energy = it.energy,
+                };
+
+                if(reproduce) {
+                    it.* = .{
+                        .type = .COW,
+                        .energy = offspringEnergy
+                    };
+                    spot.energy -= offspringEnergy;
+                }
+                else {
+                    it.* = .{
+                        .type = .EMPTY,
+                        .energy = 0
+                    };
+                }
+            },
+            
+            .PLANT, .PLANT_MUTANT => {
+                spot.* = .{
+                    .type = .COW,
+                    .energy = @intCast(i8, std.math.min(100, @intCast(u32, it.energy) + 50)),
+                };
+
+                if(reproduce) {
+                    it.* = .{
+                        .type = .COW,
+                        .energy = offspringEnergy
+                    };
+                    spot.energy -= offspringEnergy;
+                }
+                else {
+                    it.* = .{
+                        .type = .EMPTY,
+                        .energy = 0
+                    };
+                }
+            },
+
+            else => {},
+        }
+    }
+
+    fn stepPlantMutant(self: *Self, it: *Tile, x: usize, y: usize) void
+    {
+        it.energy += 5;
+        if(it.energy > 100) it.energy = 100;
+
+        if(it.energy > 50 and randi(0, 10) == 0) {
+            const dx = @intCast(i32, x) + randi(-1, 1);
+            const dy = @intCast(i32, y) + randi(-1, 1);
+
+            if(dx < 0 or dx >= WORLD_WIDTH) return;
+            if(dy < 0 or dy >= WORLD_HEIGHT) return;
+
+            const udx = @intCast(usize, dx);
+            const udy = @intCast(usize, dy);
+
+            if(self.world[udy][udx].type != .EMPTY) return;
+
+            const offspringEnergy = @intCast(i8, randi(20, 35));
+            it.energy -= offspringEnergy;
+
+            const mutate = randi(0, 1) == 0;
+            const hueAdd = if(mutate) @intCast(u8, (randi(0, 1) * 2 - 1) * randi(1, 2)) else 0;
+
+            self.world[udy][udx] = .{
+                .type = .PLANT_MUTANT,
+                .energy = offspringEnergy,
+                .hue = it.hue +% hueAdd,
+            };
+        }
+    }
+
     fn step(self: *Self) void
     {
         for(self.world) |*col, y| {
             for(col) |*it, x| {
                 switch(it.type) {
-                    .PLANT => {
-                        it.energy += 5;
-                        if(it.energy > 100) it.energy = 100;
-
-                        if(it.energy > 50 and randi(0, 10) == 0) {
-                            const dx = @intCast(i32, x) + randi(-1, 1);
-                            const dy = @intCast(i32, y) + randi(-1, 1);
-
-                            if(dx < 0 or dx >= WORLD_WIDTH) continue;
-                            if(dy < 0 or dy >= WORLD_HEIGHT) continue;
-
-                            const udx = @intCast(usize, dx);
-                            const udy = @intCast(usize, dy);
-
-                            if(self.world[udy][udx].type != .EMPTY) continue;
-
-                            const offspringEnergy = @intCast(i8, randi(20, 35));
-                            it.energy -= offspringEnergy;
-
-                            self.world[udy][udx] = .{
-                                .type = .PLANT,
-                                .energy = offspringEnergy
-                            };
-                        }
-                    },
-
-                    .COW => {
-                        var cur = &self.world[y][x];
-                        cur.energy -= 2;
-                        if(cur.energy <= 0) {
-                            cur.* = .{
-                                .type = .EMPTY,
-                                .energy = 0
-                            };
-                            continue;
-                        }
-
-                        var dx: i32 = -1;
-                        var dy: i32 = -1;
-                        while(dx < 0 or dx >= WORLD_WIDTH or dy < 0 or dy >= WORLD_HEIGHT) {
-                            dx = @intCast(i32, x) + randi(-1, 1);
-                            dy = @intCast(i32, y) + randi(-1, 1);
-                        }
-
-                        const udx = @intCast(usize, dx);
-                        const udy = @intCast(usize, dy);
-
-                        var spot = &self.world[udy][udx];
-
-                        const reproduce = cur.energy > 80 and randi(0, 8) == 0;
-                        const offspringEnergy = @intCast(i8, randi(20, 35));
-
-                        switch(spot.type) {
-                            .EMPTY => {
-                                spot.* = .{
-                                    .type = .COW,
-                                    .energy = cur.energy,
-                                };
-
-                                if(reproduce) {
-                                    cur.* = .{
-                                        .type = .COW,
-                                        .energy = offspringEnergy
-                                    };
-                                    spot.energy -= offspringEnergy;
-                                }
-                                else {
-                                    cur.* = .{
-                                        .type = .EMPTY,
-                                        .energy = 0
-                                    };
-                                }
-                            },
-                            
-                            .PLANT => {
-                                spot.* = .{
-                                    .type = .COW,
-                                    .energy = @intCast(i8, std.math.min(100, @intCast(u32, cur.energy) + 50)),
-                                };
-
-                                if(reproduce) {
-                                    cur.* = .{
-                                        .type = .COW,
-                                        .energy = offspringEnergy
-                                    };
-                                    spot.energy -= offspringEnergy;
-                                }
-                                else {
-                                    cur.* = .{
-                                        .type = .EMPTY,
-                                        .energy = 0
-                                    };
-                                }
-                            },
-
-                            else => {},
-                        }
-                    },
+                    .PLANT => self.stepPlant(it, x, y),
+                    .COW => self.stepCow(it, x, y),
+                    .PLANT_MUTANT => self.stepPlantMutant(it, x, y),
 
                     .ZAP => {
                         self.world[y][x] = .{
@@ -262,21 +352,28 @@ const Game = struct
                     .ROCK => "rock",
                     .PLANT => "plant",
                     .COW => "cow",
+                    .PLANT_MUTANT => "plant_grey",
+                    .COW_MUTANT => "cow_grey",
                     else => continue,
                 };
 
                 const scale: u8 = switch(it.type) {
-                    .PLANT => @floatToInt(u8, @intToFloat(f32, std.math.min(it.energy, 100)) / 100.0 * 255.0),
-                    .COW => std.math.max(50, @floatToInt(u8, @intToFloat(f32, std.math.min(it.energy, 100)) / 100.0 * 255.0)),
+                    .PLANT, .PLANT_MUTANT => @floatToInt(u8, @intToFloat(f32, std.math.min(it.energy, 100)) / 100.0 * 255.0),
+                    .COW, .COW_MUTANT => std.math.max(50, @floatToInt(u8, @intToFloat(f32, std.math.min(it.energy, 100)) / 100.0 * 255.0)),
                     else => 255,
                 };
 
                 const rot: u8 = switch(it.type) {
-                    .PLANT => @truncate(u8, hash32(std.mem.asBytes(&.{x,y}))),
+                    .PLANT, .PLANT_MUTANT => @truncate(u8, hash32(std.mem.asBytes(&.{x,y}))),
                     else => 0,
                 };
 
-                rdr.drawTile(content.IMG(img), @intCast(u16, x), @intCast(u16, y), scale, rot, 0xFFFFFF);
+                const color: u24 = switch(it.type) {
+                    .PLANT_MUTANT => @truncate(u24, hueToRGBA(it.hue) & 0xFFFFFF),
+                    else => 0xFFFFFF,
+                };
+
+                rdr.drawTile(content.IMG(img), @intCast(u16, x), @intCast(u16, y), scale, rot, color);
             }
         }
 
@@ -303,6 +400,8 @@ const Game = struct
                 .ADD_ROCK => "rock",
                 .ADD_PLANT => "plant",
                 .ADD_COW => "cow",
+                .ADD_PLANT_MUTANT => "plant_grey",
+                .ADD_COW_MUTANT => "cow_grey",
                 .ZAP => "zap",
             });
             rdr.drawTile(imgID, @floatToInt(u16, tm.x), @floatToInt(u16, tm.y), 255, 0, 0xFFC8FF);
@@ -319,6 +418,20 @@ const Game = struct
         const tmx = @floor(((self.input.mousePos.x - sapp.widthf() /2.0)/rdr.cam.zoom + rdr.cam.pos.x) / TILE_SIZE);
         const tmy = @floor(((self.input.mousePos.y - sapp.heightf()/2.0)/rdr.cam.zoom + rdr.cam.pos.y) / TILE_SIZE);
         return vec2.new(tmx, tmy);
+    }
+
+    fn killAllCows(self: *Self) void
+    {
+        for(self.world) |*col| {
+            for(col) |*it| {
+                if(it.type == .COW) {
+                    it.* = .{
+                        .type = .EMPTY,
+                        .energy = 0
+                    };
+                }
+            }
+        }
     }
 };
 
@@ -420,12 +533,17 @@ fn uiImage(imgID: content.ImageID) void
 
 fn doUi() void
 {
-    imgui.showDemoWindow();
+    // imgui.showDemoWindow();
 
     if(imgui.begin("Simulation")) {
         if(imgui.button("Reset")) {
             game.reset();
         }
+        imgui.sameLine();
+        if(imgui.button("Murder all the cows")) {
+            game.killAllCows();
+        }
+
         _ = imgui.sliderInt("Speed", &game.speed, 0, MAX_STEP_SPEED);
         if(imgui.checkbox("Max speed", &game.dontWaitToStep)) {
             game.signalStep();
@@ -443,6 +561,8 @@ fn doUi() void
             .{ "rock", .ADD_ROCK },
             .{ "plant", .ADD_PLANT },
             .{ "cow", .ADD_COW },
+            .{ "plant_grey", .ADD_PLANT_MUTANT },
+            .{ "cow_grey", .ADD_COW_MUTANT },
             .{ "zap", .ZAP },
         };
 
@@ -571,6 +691,15 @@ export fn input(ev: ?*const sapp.Event) void
                     },
                     .ADD_COW => game.world[tmi[1]][tmi[0]] = .{
                         .type = .COW,
+                        .energy = 100
+                    },
+                    .ADD_PLANT_MUTANT => game.world[tmi[1]][tmi[0]] = .{
+                        .type = .PLANT_MUTANT,
+                        .energy = 100,
+                        .hue = @intCast(u8, randi(0, 255))
+                    },
+                    .ADD_COW_MUTANT => game.world[tmi[1]][tmi[0]] = .{
+                        .type = .COW_MUTANT,
                         .energy = 100
                     },
                     .ZAP => game.world[tmi[1]][tmi[0]] = .{

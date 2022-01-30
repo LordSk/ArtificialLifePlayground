@@ -134,6 +134,8 @@ const g_ImageList = [_]ImageEntry
             .{ .name = "plant", .index = 1 },
             .{ .name = "cow", .index = 2 },
             .{ .name = "zap", .index = 3 },
+            .{ .name = "plant_grey", .index = 9 },
+            .{ .name = "cow_grey", .index = 10 },
         }
     },
 };
