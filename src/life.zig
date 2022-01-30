@@ -4,6 +4,7 @@ const imgui = @import("sokol").imgui;
 const math  = @import("math.zig");
 const content = @import("content.zig");
 const gfx = @import("renderer.zig");
+const sim = @import("sim.zig");
 const assert = std.debug.assert;
 
 const vec2 = math.Vec2;
@@ -15,10 +16,10 @@ const Array = std.ArrayList;
 const futex_wait = std.Thread.Futex.wait;
 const futex_wake = std.Thread.Futex.wake;
 
-const WORLD_WIDTH = 1024;
-const WORLD_HEIGHT = 1024;
-const MAX_STEP_SPEED = 100;
-const TILE_SIZE = 32;
+const WORLD_WIDTH = sim.WORLD_WIDTH;
+const WORLD_HEIGHT = sim.WORLD_HEIGHT;
+const MAX_STEP_SPEED = sim.MAX_STEP_SPEED;
+const TILE_SIZE = sim.TILE_SIZE;
 
 fn logf(comptime format: []const u8, args: anytype) void
 {

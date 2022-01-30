@@ -201,7 +201,7 @@ pub fn popID() void
 
 pub fn textf(comptime format: []const u8, args: anytype) void
 {
-    var buf: [2048:0]u8 = undefined;
+    var buf: [2048]u8 = undefined;
     var stream = std.io.fixedBufferStream(&buf);
 
     stream.writer().print(format, args) catch unreachable;

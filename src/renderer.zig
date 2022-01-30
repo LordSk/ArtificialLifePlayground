@@ -6,6 +6,7 @@ const imgui = @import("sokol").imgui;
 const shd = @import("shaders/shaders.zig");
 const math = @import("math.zig");
 const content = @import("content.zig");
+const sim = @import("sim.zig");
 
 const vec2 = math.Vec2;
 const vec3 = math.Vec3;
@@ -13,7 +14,7 @@ const mat4 = math.Mat4;
 
 const Array = std.ArrayList;
 
-const MAX_TILE_BATCH: usize = 1024*1024 + 64;
+const MAX_TILE_BATCH: usize = sim.WORLD_WIDTH*sim.WORLD_HEIGHT + 64;
 const MAX_DBGDRAW_BATCH: usize = 8192;
 
 const Camera = struct {
@@ -90,7 +91,7 @@ pub const Renderer = struct {
     gpuDbgDrawBuffer: sg.Buffer = .{},
     countDbgDraw: [enumCount(Layer)]u32 = [_]u32{0} ** enumCount(Layer),
 
-    tileImageData: [1024*1024]u32 = [_]u32{0} ** (1024*1024),
+    tileImageData: [sim.WORLD_WIDTH*sim.WORLD_HEIGHT]u32 = [_]u32{0} ** (sim.WORLD_WIDTH*sim.WORLD_HEIGHT),
     tileImage: sg.Image = .{},
 
     drawTileImage: bool = false,
@@ -240,8 +241,8 @@ pub const Renderer = struct {
         self.pass_action.colors[0] = .{ .action=.CLEAR, .value=.{ .r=0.2, .g=0.2, .b=0.2, .a=1 } };
 
         var img_desc = sg.ImageDesc{
-            .width = 1024,
-            .height = 1024,
+            .width = sim.WORLD_WIDTH,
+            .height = sim.WORLD_HEIGHT,
             .pixel_format = .RGBA8,
             .min_filter = .NEAREST,
             .mag_filter = .NEAREST,
@@ -387,7 +388,7 @@ pub const Renderer = struct {
             sg.applyBindings(self.bindTex);
 
             const vs_params: shd.texture.VsParams = .{
-                .mvp = mat4.mul(vp, mat4.scale(vec3.new(1024 * 32, 1024 * 32, 1))),
+                .mvp = mat4.mul(vp, mat4.scale(vec3.new(sim.WORLD_WIDTH * sim.TILE_SIZE, sim.WORLD_HEIGHT * sim.TILE_SIZE, 1))),
             };
 
             const fs_params: shd.texture.FsParams = .{
