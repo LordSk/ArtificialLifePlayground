@@ -51,17 +51,11 @@ inline fn CU4(r: f32, g: f32, b: f32, a: f32) u32
     return ret;
 }
 
-fn fmod(f: f32, mod: f32) f32
-{
-    const d = @floor(f / mod);
-    return f - (mod * d);
-}
-
 fn hueToRGBA(hue: u8) u32
 {
     const H = @intToFloat(f32, hue) / 255.0 * 360.0;
     const C = 1.0;
-    const X = C * (1.0 - std.math.absFloat(fmod(H/60.0, 2) - 1));
+    const X = C * (1.0 - std.math.absFloat(@mod(H/60.0, 2) - 1));
     var r: f32 = 0.0;
     var g: f32 = 0.0;
     var b: f32 = 0.0;
@@ -102,7 +96,6 @@ fn hueToRGBA(hue: u8) u32
 
 const EntityType = enum(u8) {
     EMPTY,
-    WALL,
     ZAP,
     ROCK,
     PLANT,
@@ -289,12 +282,12 @@ const Game = struct
             it.energy -= offspringEnergy;
 
             const mutate = randi(0, 1) == 0;
-            const hueAdd = if(mutate) @intCast(u8, (randi(0, 1) * 2 - 1) * randi(1, 2)) else 0;
+            const hueAdd = if(mutate) (randi(0, 1) * 2 - 1) * randi(1, 2) else 0;
 
             self.world[udy][udx] = .{
                 .type = .PLANT_MUTANT,
                 .energy = offspringEnergy,
-                .hue = it.hue +% hueAdd,
+                .hue = @truncate(u8, @bitCast(u32, it.hue +% hueAdd)),
             };
         }
     }
@@ -345,50 +338,71 @@ const Game = struct
 
     fn draw(self: Self) void
     {
-        for(self.world) |col, y| {
-            for(col) |it, x| {
-                const img = switch(it.type) {
-                    .ZAP => "zap",
-                    .ROCK => "rock",
-                    .PLANT => "plant",
-                    .COW => "cow",
-                    .PLANT_MUTANT => "plant_grey",
-                    .COW_MUTANT => "cow_grey",
-                    else => continue,
-                };
+        const highDef = rdr.cam.zoom > 0.3;
 
-                const scale: u8 = switch(it.type) {
-                    .PLANT, .PLANT_MUTANT => @floatToInt(u8, @intToFloat(f32, std.math.min(it.energy, 100)) / 100.0 * 255.0),
-                    .COW, .COW_MUTANT => std.math.max(50, @floatToInt(u8, @intToFloat(f32, std.math.min(it.energy, 100)) / 100.0 * 255.0)),
-                    else => 255,
-                };
+        if(highDef) {
+            for(self.world) |col, y| {
+                for(col) |it, x| {
+                    const img = switch(it.type) {
+                        .ZAP => "zap",
+                        .ROCK => "rock",
+                        .PLANT => "plant",
+                        .COW => "cow",
+                        .PLANT_MUTANT => "plant_grey",
+                        .COW_MUTANT => "cow_grey",
+                        else => continue,
+                    };
 
-                const rot: u8 = switch(it.type) {
-                    .PLANT, .PLANT_MUTANT => @truncate(u8, hash32(std.mem.asBytes(&.{x,y}))),
-                    else => 0,
-                };
+                    const scale: u8 = switch(it.type) {
+                        .PLANT, .PLANT_MUTANT => @floatToInt(u8, @intToFloat(f32, std.math.min(it.energy, 100)) / 100.0 * 255.0),
+                        .COW, .COW_MUTANT => std.math.max(50, @floatToInt(u8, @intToFloat(f32, std.math.min(it.energy, 100)) / 100.0 * 255.0)),
+                        else => 255,
+                    };
 
-                const color: u24 = switch(it.type) {
-                    .PLANT_MUTANT => @truncate(u24, hueToRGBA(it.hue) & 0xFFFFFF),
-                    else => 0xFFFFFF,
-                };
+                    const rot: u8 = switch(it.type) {
+                        .PLANT, .PLANT_MUTANT => @truncate(u8, hash32(std.mem.asBytes(&.{x,y}))),
+                        else => 0,
+                    };
 
-                rdr.drawTile(content.IMG(img), @intCast(u16, x), @intCast(u16, y), scale, rot, color);
-            }
-        }
+                    const color: u24 = switch(it.type) {
+                        .PLANT_MUTANT => @truncate(u24, hueToRGBA(it.hue) & 0xFFFFFF),
+                        else => 0xFFFFFF,
+                    };
 
-        // draw grid
-        if(self.configShowGrid) {
-            if(rdr.cam.zoom > 0.3) {
-                var i: i32 = 0;
-                while(i < WORLD_WIDTH+1): (i += 1) {
-                    const f = @intToFloat(f32, i);
-                    rdr.drawLine(0.0, f * TILE_SIZE, WORLD_WIDTH * TILE_SIZE, f * TILE_SIZE, .GAME, 1.0/rdr.cam.zoom, comptime CU4(1, 1, 1, 0.1));
-                    rdr.drawLine(f * TILE_SIZE, 0.0, f * TILE_SIZE, WORLD_WIDTH * TILE_SIZE, .GAME, 1.0/rdr.cam.zoom, comptime CU4(1, 1, 1, 0.1));
+                    rdr.drawTile(content.IMG(img), @intCast(u16, x), @intCast(u16, y), scale, rot, color);
                 }
             }
         }
+        else {
+            for(self.world) |col, y| {
+                for(col) |it, x| {
+                    const colour: u32 = switch(it.type) {
+                        .EMPTY => 0x0,
+                        .ZAP => 0xff71e7ff,
+                        .ROCK => 0xff8d8d8d,
+                        .PLANT => 0xff00691b,
+                        .COW => 0xff00509c,
+                        .PLANT_MUTANT => hueToRGBA(it.hue),
+                        .COW_MUTANT => hueToRGBA(it.hue),
+                    };
+
+                    rdr.tileImageData[y * WORLD_WIDTH + x] = colour;
+                }
+            }
+            rdr.drawTileImage = true;
+        }
+
+        // draw grid
+        if(self.configShowGrid and highDef) {
+            var i: i32 = 0;
+            while(i < WORLD_WIDTH+1): (i += 1) {
+                const f = @intToFloat(f32, i);
+                rdr.drawLine(0.0, f * TILE_SIZE, WORLD_WIDTH * TILE_SIZE, f * TILE_SIZE, .GAME, 1.0/rdr.cam.zoom, comptime CU4(1, 1, 1, 0.1));
+                rdr.drawLine(f * TILE_SIZE, 0.0, f * TILE_SIZE, WORLD_WIDTH * TILE_SIZE, .GAME, 1.0/rdr.cam.zoom, comptime CU4(1, 1, 1, 0.1));
+            }
+        }
         
+        // background
         rdr.drawDbgQuad(0, 0, .BACK, WORLD_WIDTH * TILE_SIZE, WORLD_WIDTH * TILE_SIZE, 0.0, 0xFF0d131e);
 
         // mouse hover
@@ -533,7 +547,7 @@ fn uiImage(imgID: content.ImageID) void
 
 fn doUi() void
 {
-    // imgui.showDemoWindow();
+    imgui.showDemoWindow();
 
     if(imgui.begin("Simulation")) {
         if(imgui.button("Reset")) {
@@ -548,6 +562,9 @@ fn doUi() void
         if(imgui.checkbox("Max speed", &game.dontWaitToStep)) {
             game.signalStep();
         }
+
+        //imgui.textf("zoom = {d}", .{ rdr.cam.zoom });
+        imgui.textf("fps = {d}", .{ @floatToInt(u64, 1.0/sapp.frameDuration()) });
     }
     imgui.end();
 

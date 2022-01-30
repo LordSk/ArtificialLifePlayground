@@ -1,3 +1,4 @@
+const std = @import("std");
 const sapp = @import("app.zig");
 const sg = @import("gfx.zig");
 
@@ -138,6 +139,7 @@ pub extern fn igSameLine(offset_from_start_x: f32, spacing: f32) void;
 pub extern fn igImage(user_texture_id: ImTextureID, size: ImVec2, uv0: ImVec2, uv1: ImVec2, tint_col: ImVec4, border_col: ImVec4) void;
 pub extern fn igPushID_Int(id: i32) void;
 pub extern fn igPopID() void;
+pub extern fn igText(format: [*:0]const u8, ...) void;
 
 pub fn showDemoWindow() void
 {
@@ -195,4 +197,21 @@ pub fn pushID(id: i32) void
 pub fn popID() void
 {
     igPopID();
+}
+
+pub fn textf(comptime format: []const u8, args: anytype) void
+{
+    var buf: [2048:0]u8 = undefined;
+    var stream = std.io.fixedBufferStream(&buf);
+
+    stream.writer().print(format, args) catch unreachable;
+    buf[stream.pos] = 0;
+    const sent = buf[0..stream.pos:0];
+
+    igText(sent);
+}
+
+pub fn text(txt: [*:0]const u8) void
+{
+    igText(txt);
 }

@@ -74,9 +74,12 @@ pub const Renderer = struct {
 
     bindTiles: sg.Bindings = .{},
     bindDbgDraw: sg.Bindings = .{},
+    bindTex: sg.Bindings = .{},
+
     pipeDbgDraw: sg.Pipeline = .{},
     pipeTex: sg.Pipeline = .{},
     pipeTile: sg.Pipeline = .{},
+    
     pass_action: sg.PassAction = .{},
 
     tileBatch: Array(GpuTileEntry) = undefined,
@@ -86,6 +89,11 @@ pub const Renderer = struct {
     gpuTileBuffer: sg.Buffer = .{},
     gpuDbgDrawBuffer: sg.Buffer = .{},
     countDbgDraw: [enumCount(Layer)]u32 = [_]u32{0} ** enumCount(Layer),
+
+    tileImageData: [1024*1024]u32 = [_]u32{0} ** (1024*1024),
+    tileImage: sg.Image = .{},
+
+    drawTileImage: bool = false,
 
     pub fn init(self: *Self, allocator: std.mem.Allocator) bool
     {
@@ -101,8 +109,8 @@ pub const Renderer = struct {
         const vertQuadCentered = [_]f32 {
             // positions         uv
             -0.5, -0.5, 0.0,     0, 0,
-                0.5, -0.5, 0.0,     1, 0,
-                0.5,  0.5, 0.0,     1, 1,
+            0.5, -0.5, 0.0,     1, 0,
+            0.5,  0.5, 0.0,     1, 1,
             -0.5,  0.5, 0.0,     0, 1,
         };
         // quad
@@ -113,11 +121,22 @@ pub const Renderer = struct {
             1.0, 1.0, 0.0,
             0.0, 1.0, 0.0,
         };
+        // quad uv 
+        const vertQuadUV = [_]f32 {
+            // positions
+            0.0, 0.0, 0.0,    0.0, 0.0,
+            1.0, 0.0, 0.0,    1.0, 0.0,
+            1.0, 1.0, 0.0,    1.0, 1.0,
+            0.0, 1.0, 0.0,    0.0, 1.0
+        };
         self.bindTiles.vertex_buffers[0] = sg.makeBuffer(.{
             .data = sg.asRange(vertQuadCentered)
         });
         self.bindDbgDraw.vertex_buffers[0] = sg.makeBuffer(.{
             .data = sg.asRange(vertQuad)
+        });
+        self.bindTex.vertex_buffers[0] = sg.makeBuffer(.{
+            .data = sg.asRange(vertQuadUV)
         });
 
         // an index buffer
@@ -127,6 +146,10 @@ pub const Renderer = struct {
             .data = sg.asRange(indices)
         });
         self.bindDbgDraw.index_buffer = sg.makeBuffer(.{
+            .type = .INDEXBUFFER,
+            .data = sg.asRange(indices)
+        });
+        self.bindTex.index_buffer = sg.makeBuffer(.{
             .type = .INDEXBUFFER,
             .data = sg.asRange(indices)
         });
@@ -194,8 +217,40 @@ pub const Renderer = struct {
 
         self.pipeTile = sg.makePipeline(pip_desc);
 
+        // tex pipeline
+        pip_desc = .{
+            .index_type = .UINT16,
+            .shader = sg.makeShader(shd.texture.colorShaderDesc(sg.queryBackend())),
+            .depth = .{
+                .compare = .LESS_EQUAL,
+                .write_enabled = true,
+            },
+            .cull_mode = .BACK
+        };
+        pip_desc.layout.attrs[shd.texture.ATTR_vs_position].format = .FLOAT3;
+        pip_desc.layout.attrs[shd.texture.ATTR_vs_uv0].format = .FLOAT2;
+        pip_desc.colors[0].blend = .{
+            .enabled = true,
+            .src_factor_rgb = .SRC_ALPHA,
+            .dst_factor_rgb = .ONE_MINUS_SRC_ALPHA
+        };
+        self.pipeTex = sg.makePipeline(pip_desc);
+
         // clear to grey
         self.pass_action.colors[0] = .{ .action=.CLEAR, .value=.{ .r=0.2, .g=0.2, .b=0.2, .a=1 } };
+
+        var img_desc = sg.ImageDesc{
+            .width = 1024,
+            .height = 1024,
+            .pixel_format = .RGBA8,
+            .min_filter = .NEAREST,
+            .mag_filter = .NEAREST,
+            .wrap_u = .CLAMP_TO_EDGE,
+            .wrap_v = .CLAMP_TO_EDGE,
+            .usage = .STREAM,
+        };
+        self.tileImage = sg.makeImage(img_desc);
+
         return true;
     }
 
@@ -318,6 +373,31 @@ pub const Renderer = struct {
 
             sg.applyUniforms(.VS, shd.tile.SLOT_vs_params, sg.asRange(vs_params));
             sg.draw(0, 6, @intCast(u32, self.tileBatch.items.len));
+        }
+
+        if(self.drawTileImage) {
+            self.drawTileImage = false;
+
+            var imgData : sg.ImageData = .{};
+            imgData.subimage[0][0] = sg.asRange(self.tileImageData);
+            sg.updateImage(self.tileImage, imgData);
+
+            sg.applyPipeline(self.pipeTex);
+            self.bindTex.fs_images[0] = self.tileImage;
+            sg.applyBindings(self.bindTex);
+
+            const vs_params: shd.texture.VsParams = .{
+                .mvp = mat4.mul(vp, mat4.scale(vec3.new(1024 * 32, 1024 * 32, 1))),
+            };
+
+            const fs_params: shd.texture.FsParams = .{
+                .color = .{ 1, 1, 1 },
+            };
+
+            sg.applyUniforms(.VS, shd.texture.SLOT_vs_params, sg.asRange(vs_params));
+            sg.applyUniforms(.FS, shd.texture.SLOT_fs_params, sg.asRange(fs_params));
+
+            sg.draw(0, 6, 1);
         }
 
         self.renderLayer(.GAME, vp);
