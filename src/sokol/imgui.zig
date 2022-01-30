@@ -205,6 +205,7 @@ pub fn textf(comptime format: []const u8, args: anytype) void
     var stream = std.io.fixedBufferStream(&buf);
 
     stream.writer().print(format, args) catch unreachable;
+    if(stream.pos >= buf.len) unreachable; // out of bounds
     buf[stream.pos] = 0;
     const sent = buf[0..stream.pos:0];
 

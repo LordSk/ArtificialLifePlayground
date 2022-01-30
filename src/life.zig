@@ -5,6 +5,7 @@ const math  = @import("math.zig");
 const content = @import("content.zig");
 const gfx = @import("renderer.zig");
 const sim = @import("sim.zig");
+const stb = @import("stb/stb.zig");
 const assert = std.debug.assert;
 
 const vec2 = math.Vec2;
@@ -141,6 +142,7 @@ const Game = struct
     dontWaitToStep: bool = false,
 
     configShowGrid: bool = false,
+    simConfigZaps: bool = true,
 
     clickAction: ClickAction = .ADD_ROCK,
 
@@ -282,7 +284,8 @@ const Game = struct
             const offspringEnergy = @intCast(i8, randi(20, 35));
             it.energy -= offspringEnergy;
 
-            const mutate = randi(0, 1) == 0;
+            //const mutate = randi(0, 1) == 0;
+            const mutate = true;
             const hueAdd = if(mutate) (randi(0, 1) * 2 - 1) * randi(1, 2) else 0;
 
             self.world[udy][udx] = .{
@@ -314,16 +317,18 @@ const Game = struct
             }
         }
 
-        const zapCount = randi(0, WORLD_WIDTH* WORLD_HEIGHT / 2048);
-        var z: i32 = 0;
-        while(z < zapCount): (z += 1) {
-            const ux = @intCast(usize, randi(0, WORLD_WIDTH-1));
-            const uy = @intCast(usize, randi(0, WORLD_HEIGHT-1));
+        if(self.simConfigZaps) {
+            const zapCount = randi(0, WORLD_WIDTH* WORLD_HEIGHT / 2048);
+            var z: i32 = 0;
+            while(z < zapCount): (z += 1) {
+                const ux = @intCast(usize, randi(0, WORLD_WIDTH-1));
+                const uy = @intCast(usize, randi(0, WORLD_HEIGHT-1));
 
-            self.world[uy][ux] = .{
-                .type = .ZAP,
-                .energy = 0
-            };
+                self.world[uy][ux] = .{
+                    .type = .ZAP,
+                    .energy = 0
+                };
+            }
         }
     }
 
@@ -473,6 +478,20 @@ inline fn randi(min: i32, max: i32) i32
     return min + @intCast(i32, xorshift32() % mod);
 }
 
+fn FMT(comptime fmt: []const u8, args: anytype) [*:0]const u8
+{
+    const S = struct {
+        var buf: [2048]u8 = undefined;
+    };
+    var stream = std.io.fixedBufferStream(&S.buf);
+
+    stream.writer().print(fmt, args) catch unreachable;
+    if(stream.pos >= S.buf.len) unreachable; // out of bounds
+    S.buf[stream.pos] = 0;
+    const sent = S.buf[0..stream.pos:0];
+    return sent;
+}
+
 export fn init() void
 {
     sapp.lockMouse(false); // show cursor
@@ -560,6 +579,9 @@ fn doUi() void
         }
 
         _ = imgui.sliderInt("Speed", &game.speed, 0, MAX_STEP_SPEED);
+        
+        _ = imgui.checkbox("Zaps", &game.simConfigZaps);
+        imgui.sameLine();
         if(imgui.checkbox("Max speed", &game.dontWaitToStep)) {
             game.signalStep();
         }
@@ -571,6 +593,9 @@ fn doUi() void
 
     if(imgui.begin("Options")) {
         _ = imgui.checkbox("Show grid", &game.configShowGrid);
+        if(imgui.button("Save image")) {
+            stb.save(FMT("output_{d}.png", .{ std.time.timestamp() }), sim.WORLD_WIDTH, sim.WORLD_HEIGHT, rdr.tileImageData[0..]) catch log("ERROR: failed to save image");
+        }
     }
     imgui.end();
 
