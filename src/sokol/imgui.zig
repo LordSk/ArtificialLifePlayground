@@ -116,6 +116,35 @@ pub fn handleEvent(ev: ?*const sapp.Event) bool {
 // cimgui.h
 const ImGuiWindowFlags = i32;
 const ImGuiSliderFlags = i32;
+const ImGuiColorEditFlags = i32;
+const ImGuiColorEditFlags_ = enum(i32)
+{
+    None            = 0,
+    NoAlpha         = 1 << 1,
+    NoPicker        = 1 << 2,
+    NoOptions       = 1 << 3,
+    NoSmallPreview  = 1 << 4,  
+    NoInputs        = 1 << 5,  
+    NoTooltip       = 1 << 6,  
+    NoLabel         = 1 << 7,  
+    NoSidePreview   = 1 << 8,  
+    NoDragDrop      = 1 << 9,  
+    NoBorder        = 1 << 10, 
+    AlphaBar        = 1 << 16, 
+    AlphaPreview    = 1 << 17, 
+    AlphaPreviewHalf= 1 << 18, 
+    HDR             = 1 << 19, 
+    DisplayRGB      = 1 << 20, 
+    DisplayHSV      = 1 << 21, 
+    DisplayHex      = 1 << 22, 
+    Uint8           = 1 << 23, 
+    Float           = 1 << 24, 
+    PickerHueBar    = 1 << 25, 
+    PickerHueWheel  = 1 << 26, 
+    InputRGB        = 1 << 27, 
+    InputHSV        = 1 << 28,
+};
+
 pub const ImVec2 = extern struct {
     x: f32,
     y: f32
@@ -140,6 +169,7 @@ pub extern fn igImage(user_texture_id: ImTextureID, size: ImVec2, uv0: ImVec2, u
 pub extern fn igPushID_Int(id: i32) void;
 pub extern fn igPopID() void;
 pub extern fn igText(format: [*:0]const u8, ...) void;
+pub extern fn igColorEdit4(label: [*:0]const u8, col: [*c]f32, flags: ImGuiColorEditFlags) bool;
 
 pub fn showDemoWindow() void
 {
@@ -215,4 +245,9 @@ pub fn textf(comptime format: []const u8, args: anytype) void
 pub fn text(txt: [*:0]const u8) void
 {
     igText(txt);
+}
+
+pub fn color(label: [*:0]const u8, c: *[4]f32) bool
+{
+    return igColorEdit4(label, c, @enumToInt(ImGuiColorEditFlags_.DisplayRGB) | @enumToInt(ImGuiColorEditFlags_.InputRGB) | @enumToInt(ImGuiColorEditFlags_.Float));
 }

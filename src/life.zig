@@ -142,6 +142,9 @@ const Game = struct
     dontWaitToStep: bool = false,
 
     configShowGrid: bool = false,
+    configMutationColour: [4]f32 = .{1, 1, 1, 1},
+    configRandomMutColour: bool = true,
+
     simConfigZaps: bool = true,
     simConfigMutationRange: i32 = 5,
 
@@ -619,6 +622,11 @@ fn doUi() void
             
             if(i+1 < actions.len) imgui.sameLine();
         }
+
+        _ = imgui.checkbox("Random colour", &game.configRandomMutColour);
+        if(!game.configRandomMutColour) {
+            _ = imgui.color("Colour", &game.configMutationColour);
+        }
     }
     imgui.end();
 }
@@ -742,7 +750,16 @@ export fn input(ev: ?*const sapp.Event) void
                     .ADD_PLANT_MUTANT => game.world[tmi[1]][tmi[0]] = .{
                         .type = .PLANT_MUTANT,
                         .energy = 100,
-                        .colour = @intCast(u24, randi(0, 0xFFFFFF))
+                        .colour =
+                            if(game.configRandomMutColour)
+                                @intCast(u24, randi(0, 0xFFFFFF))
+                            else 
+                                @truncate(u24, CU4(
+                                    game.configMutationColour[0],
+                                    game.configMutationColour[1],
+                                    game.configMutationColour[2],
+                                    game.configMutationColour[3])
+                                )
                     },
                     .ADD_COW_MUTANT => game.world[tmi[1]][tmi[0]] = .{
                         .type = .COW_MUTANT,
