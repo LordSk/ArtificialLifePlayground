@@ -19,7 +19,9 @@ pub fn build(b: *Builder) void {
     exe.setTarget(target);
     exe.setBuildMode(mode);
     exe.linkLibrary(buildSokol(b, target, mode, cross_compiling, ""));
+    exe.linkLibrary(buildTracy(b, target, mode));
     exe.addPackagePath("sokol", "src/sokol/sokol.zig");
+    exe.addPackagePath("tracy", "src/tracy/tracy.zig");
     if (cross_compiling) {
         exe.addLibPath("/usr/lib");
         exe.addFrameworkDir("/System/Library/Frameworks");
@@ -27,6 +29,25 @@ pub fn build(b: *Builder) void {
     exe.install();
 
     b.step("run", "Run playground").dependOn(&exe.run().step);
+}
+
+fn buildTracy(b: *Builder, target: CrossTarget, mode: Mode) *LibExeObjStep
+{
+    const lib = b.addStaticLibrary("tracy", null);
+    lib.setTarget(target);
+    lib.setBuildMode(mode);
+    lib.linkLibCpp();
+
+    lib.addCSourceFile("src/tracy/c/TracyClient.cpp", &.{ "-DTRACY_ENABLE", "-fno-sanitize=undefined" });
+
+    if(lib.target.isWindows()) {
+        lib.linkSystemLibrary("advapi32");
+        lib.linkSystemLibrary("user32");
+        lib.linkSystemLibrary("ws2_32");
+        lib.linkSystemLibrary("dbghelp");
+    }
+
+    return lib;
 }
 
 fn buildSokol(b: *Builder, target: CrossTarget, mode: Mode, cross_compiling: bool, comptime prefix_path: []const u8) *LibExeObjStep {

@@ -6,7 +6,11 @@ const content = @import("content.zig");
 const gfx = @import("renderer.zig");
 const sim = @import("sim.zig");
 const stb = @import("stb/stb.zig");
+const tracy = @import("tracy");
+
 const assert = std.debug.assert;
+
+const trace = tracy.trace;
 
 const vec2 = math.Vec2;
 const vec3 = math.Vec3;
@@ -302,6 +306,9 @@ const Game = struct
 
     fn step(self: *Self) void
     {
+        const profile = trace(@src());
+        defer profile.end();
+
         for(self.world) |*col, y| {
             for(col) |*it, x| {
                 switch(it.type) {
@@ -348,6 +355,9 @@ const Game = struct
 
     fn draw(self: Self) void
     {
+        const profile = trace(@src());
+        defer profile.end();
+
         const highDef = rdr.cam.zoom > 0.3;
 
         if(highDef) {
@@ -498,6 +508,9 @@ fn FMT(comptime fmt: []const u8, args: anytype) [*:0]const u8
 
 export fn init() void
 {
+    const profile = trace(@src());
+    defer profile.end();
+
     sapp.lockMouse(false); // show cursor
 
     if(!rdr.init(arena.allocator())) {
@@ -571,6 +584,9 @@ fn uiImage(imgID: content.ImageID) void
 
 fn doUi() void
 {
+    const profile = trace(@src());
+    defer profile.end();
+
     imgui.showDemoWindow();
 
     if(imgui.begin("Simulation")) {
@@ -635,6 +651,11 @@ var skippedSteps: i32 = 0;
 
 export fn frame() void
 {
+    tracy.frameMark();
+
+    const profile = trace(@src());
+    defer profile.end();
+
     imgui.newFrame(.{
         .width = sapp.width(),
         .height = sapp.height(),
