@@ -113,7 +113,7 @@ const Game = struct
     const Tile = struct {
         type: EntityType,
         energy: i8,
-        hue: u8 = 0,
+        colour: u24 = 0,
     };
 
     const ClickAction = enum {
@@ -135,7 +135,7 @@ const Game = struct
         mousePos: vec2 = vec2.new(0, 0)
     } = .{},
 
-    world: [WORLD_WIDTH][WORLD_HEIGHT]Tile = undefined,
+    world: [WORLD_HEIGHT][WORLD_WIDTH]Tile = undefined,
 
     pulse: std.atomic.Atomic(u32) = .{ .value = 0 },
     speed: i32 = 80,
@@ -143,6 +143,7 @@ const Game = struct
 
     configShowGrid: bool = false,
     simConfigZaps: bool = true,
+    simConfigMutationRange: i32 = 5,
 
     clickAction: ClickAction = .ADD_ROCK,
 
@@ -284,14 +285,14 @@ const Game = struct
             const offspringEnergy = @intCast(i8, randi(20, 35));
             it.energy -= offspringEnergy;
 
-            //const mutate = randi(0, 1) == 0;
-            const mutate = true;
-            const hueAdd = if(mutate) (randi(0, 1) * 2 - 1) * randi(1, 2) else 0;
+            const comp = @intCast(usize, randi(0, 2));
+            var rgb: [3]u8 = .{ @truncate(u8, it.colour), @truncate(u8, it.colour >> 8), @truncate(u8, it.colour >> 16) };
+            rgb[comp] = @truncate(u8, @intCast(u32, @maximum(0, @minimum(0xFF, rgb[comp] + ((randi(0, 1) * 2 - 1) * randi(1, self.simConfigMutationRange))))));
 
             self.world[udy][udx] = .{
                 .type = .PLANT_MUTANT,
                 .energy = offspringEnergy,
-                .hue = @truncate(u8, @bitCast(u32, it.hue +% hueAdd)),
+                .colour = @intCast(u24, rgb[0]) | (@intCast(u24, rgb[1]) << 8) | (@intCast(u24, rgb[2]) << 16),
             };
         }
     }
@@ -371,7 +372,7 @@ const Game = struct
                     };
 
                     const color: u24 = switch(it.type) {
-                        .PLANT_MUTANT => @truncate(u24, hueToRGBA(it.hue) & 0xFFFFFF),
+                        .PLANT_MUTANT => it.colour,
                         else => 0xFFFFFF,
                     };
 
@@ -388,8 +389,8 @@ const Game = struct
                         .ROCK => 0xff8d8d8d,
                         .PLANT => 0xff00691b,
                         .COW => 0xff00509c,
-                        .PLANT_MUTANT => hueToRGBA(it.hue),
-                        .COW_MUTANT => hueToRGBA(it.hue),
+                        .PLANT_MUTANT => @intCast(u32, it.colour) | 0xFF000000,
+                        .COW_MUTANT => @intCast(u32, it.colour) | 0xFF000000,
                     };
 
                     rdr.tileImageData[y * WORLD_WIDTH + x] = colour;
@@ -404,12 +405,12 @@ const Game = struct
             while(i < WORLD_WIDTH+1): (i += 1) {
                 const f = @intToFloat(f32, i);
                 rdr.drawLine(0.0, f * TILE_SIZE, WORLD_WIDTH * TILE_SIZE, f * TILE_SIZE, .GAME, 1.0/rdr.cam.zoom, comptime CU4(1, 1, 1, 0.1));
-                rdr.drawLine(f * TILE_SIZE, 0.0, f * TILE_SIZE, WORLD_WIDTH * TILE_SIZE, .GAME, 1.0/rdr.cam.zoom, comptime CU4(1, 1, 1, 0.1));
+                rdr.drawLine(f * TILE_SIZE, 0.0, f * TILE_SIZE, WORLD_HEIGHT * TILE_SIZE, .GAME, 1.0/rdr.cam.zoom, comptime CU4(1, 1, 1, 0.1));
             }
         }
         
         // background
-        rdr.drawDbgQuad(0, 0, .BACK, WORLD_WIDTH * TILE_SIZE, WORLD_WIDTH * TILE_SIZE, 0.0, 0xFF0d131e);
+        rdr.drawDbgQuad(0, 0, .BACK, WORLD_WIDTH * TILE_SIZE, WORLD_HEIGHT * TILE_SIZE, 0.0, 0xFF0d131e);
 
         // mouse hover
         const tm = self.getGridMousePos();
@@ -578,6 +579,8 @@ fn doUi() void
             game.killAllCows();
         }
 
+        _ = imgui.sliderInt("Mutation range", &game.simConfigMutationRange, 1, 128);
+
         _ = imgui.sliderInt("Speed", &game.speed, 0, MAX_STEP_SPEED);
         
         _ = imgui.checkbox("Zaps", &game.simConfigZaps);
@@ -739,7 +742,7 @@ export fn input(ev: ?*const sapp.Event) void
                     .ADD_PLANT_MUTANT => game.world[tmi[1]][tmi[0]] = .{
                         .type = .PLANT_MUTANT,
                         .energy = 100,
-                        .hue = @intCast(u8, randi(0, 255))
+                        .colour = @intCast(u24, randi(0, 0xFFFFFF))
                     },
                     .ADD_COW_MUTANT => game.world[tmi[1]][tmi[0]] = .{
                         .type = .COW_MUTANT,
