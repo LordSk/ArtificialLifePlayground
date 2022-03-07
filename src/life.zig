@@ -278,11 +278,12 @@ const Game = struct
         if(it.energy > 100) it.energy = 100;
 
         if(it.energy > 50 and randi(0, 10) == 0) {
-            const dx = @intCast(i32, x) + randi(-1, 1);
-            const dy = @intCast(i32, y) + randi(-1, 1);
-
-            if(dx < 0 or dx >= WORLD_WIDTH) return;
-            if(dy < 0 or dy >= WORLD_HEIGHT) return;
+            var dx: i32 = -1;
+            var dy: i32 = -1;
+            while(dx < 0 or dx >= WORLD_WIDTH or dy < 0 or dy >= WORLD_HEIGHT) {
+                dx = @intCast(i32, x) + randi(-1, 1);
+                dy = @intCast(i32, y) + randi(-1, 1);
+            }
 
             const udx = @intCast(usize, dx);
             const udy = @intCast(usize, dy);

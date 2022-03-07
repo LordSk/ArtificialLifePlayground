@@ -2,7 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const build_options = @import("build_options");
 
-pub const enable = true;
+pub const enable = false;
 pub const enable_allocation = false;
 pub const enable_callstack = false;
 
