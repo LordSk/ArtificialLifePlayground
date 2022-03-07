@@ -1,6 +1,6 @@
 # Artificial life playground
 
-This is a reproduction of the demo presented by Dave Ackley in his presentation:
+This is a reproduction of the demo presented by Dave Ackley:
 
 [![NMCS4ALL: Artificial Life (full version)](https://img.youtube.com/vi/YJRRu4dJnTI/0.jpg)](http://www.youtube.com/watch?v=YJRRu4dJnTI "NMCS4ALL: Artificial Life (full version)")
 
